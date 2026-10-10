@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "description": "鹈鹕测试 —— 用于测试大语言模型生成 SVG 图形能力的工具，支持网页版与桌面版",
+  "author": "aimo6",
   "main": "desktop/main.js",
   "scripts": {
     "dev": "electron .",

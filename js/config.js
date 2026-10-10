@@ -9,11 +9,9 @@ export const APP_TAGLINE = 'SVG 模型测试';
 /**
  * GitHub 仓库地址（独立常量）。
  *
- * 请在这里填写真实的仓库地址，例如 'https://github.com/your-name/pelican-test-web'。
- * 留空时导航栏的 GitHub 图标会处于禁用状态并给出提示，不会跳转到任何地址
- * （此处刻意不预置任何猜测出来的仓库地址）。
+ * 留空时导航栏的 GitHub 图标会处于禁用状态并给出提示，不会跳转到任何地址。
  */
-export const GITHUB_REPO_URL = '';
+export const GITHUB_REPO_URL = 'https://github.com/aimo6/pelican-test';
 
 /** IndexedDB 数据库名与版本 */
 export const DB_NAME = 'pelican-svg-test';
