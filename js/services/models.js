@@ -7,6 +7,7 @@
  */
 
 import { ENDPOINTS, MODEL_LIST_TIMEOUT_MS } from '../config.js';
+import { t } from '../utils/i18n.js';
 import { buildEndpoint, describeUrl, validateBaseUrl } from '../utils/url.js';
 import { ApiError, requestJson } from './http.js';
 import { buildAuthHeaders } from './inference.js';
@@ -60,12 +61,12 @@ export function parseModelList(payload) {
 export async function fetchModelList({ baseUrl, apiKey = '', protocol = 'chat', signal = null }) {
   const validation = validateBaseUrl(baseUrl);
   if (!validation.ok) {
-    throw new ApiError(validation.error || 'Base URL 不合法', { kind: 'config' });
+    throw new ApiError(validation.error || t('inference.invalidBaseUrl'), { kind: 'config' });
   }
 
   const url = buildEndpoint(baseUrl, ENDPOINTS.models);
   if (!url) {
-    throw new ApiError('无法根据 Base URL 拼接出模型列表地址', { kind: 'config' });
+    throw new ApiError(t('models.buildUrlFailed'), { kind: 'config' });
   }
 
   const { data } = await requestJson(url, {
@@ -78,10 +79,10 @@ export async function fetchModelList({ baseUrl, apiKey = '', protocol = 'chat', 
 
   const models = parseModelList(data);
   if (models.length === 0) {
-    throw new ApiError('接口调用成功，但响应中没有找到模型列表。', {
+    throw new ApiError(t('models.empty.message'), {
       kind: 'format',
-      detail: `请求地址：${describeUrl(url)}`,
-      hint: '本工具期望的返回结构是 { "data": [ { "id": "模型名" } ] }。该供应商可能不支持 /models 接口，请直接手动填写模型 ID。',
+      detail: t('models.empty.detail', { url: describeUrl(url) }),
+      hint: t('models.empty.hint'),
     });
   }
 

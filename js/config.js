@@ -1,10 +1,10 @@
 /**
  * 全局配置常量。
  * 这里只放不会随运行时变化的静态配置，运行时数据统一放在 store/state.js。
+ *
+ * 面向界面的文案（品牌名、协议名、思考等级、示例提示词等）统一放在 utils/i18n.js 的字典里，
+ * 这里只保留与语言无关的标识符与配置。
  */
-
-export const APP_NAME = '鹈鹕测试';
-export const APP_TAGLINE = 'SVG 模型测试';
 
 /**
  * GitHub 仓库地址（独立常量）。
@@ -24,19 +24,27 @@ export const HISTORY_LIMIT = 10;
  * 单次推理请求超时时间（毫秒）。
  * 这是「浏览器侧」的兜底超时：只在本工具等不到任何响应时生效。
  * 如果链路上有网关（nginx 等）先超时，会先收到网关返回的 504，改这里没有用。
+ * 注意：自动重试时该超时按「每次尝试」计算（5 次尝试最坏情况约 15 分钟）。
  */
-export const REQUEST_TIMEOUT_MS = 600000;
+export const REQUEST_TIMEOUT_MS = 180000;
 
 /** 模型列表请求超时时间（毫秒） */
 export const MODEL_LIST_TIMEOUT_MS = 20000;
 
-/** 默认示例提示词 */
-export const DEFAULT_PROMPT =
-  '使用 SVG 绘制一个戴着蓝色帽子的鹈鹕在海边骑自行车的 2D 动画，画面简洁，主体清晰。';
+/**
+ * 单次测试的最大尝试次数（含首次）。
+ * 只有「可能靠重试恢复」的失败才会自动重试（超时 / HTTP 408 / 429 / 5xx），
+ * 配置类错误（400 / 401 / 403 / 404 / CORS 等）重试没有意义，会立即报错。
+ */
+export const MAX_ATTEMPTS = 5;
+
+/** 自动重试的基础间隔（毫秒）：第 n 次重试前等待 n × 该值（2s / 4s / 6s / 8s） */
+export const RETRY_DELAY_MS = 2000;
 
 /**
  * 发送给模型的系统提示词。
  * 目的：拿到可直接渲染的 SVG，减少 Markdown 代码围栏和多余解释。
+ * 注意：该提示词固定为中文，不随界面语言变化（避免请求行为随语言切换而改变）。
  */
 export const SYSTEM_PROMPT = [
   '你是一个 SVG 图形生成专家。',
@@ -55,6 +63,7 @@ export const SYSTEM_PROMPT = [
  * - responses：OpenAI Responses 接口
  * - messages：Anthropic Claude Messages 接口
  *
+ * `labelKey` 指向 utils/i18n.js 中的文案 key，展示时用 t(labelKey) 解析；
  * `defaultModels` 是「拉取模型列表失败」时展示的建议模型，仅作参考，
  * 可直接按自己的网关/供应商情况修改（不保证这些模型一定可用）。
  */
@@ -62,21 +71,21 @@ export const PROTOCOLS = [
   {
     value: 'chat',
     short: 'chat',
-    label: '对话接口（Chat Completions）',
+    labelKey: 'protocol.chat',
     endpoint: '/chat/completions',
     defaultModels: [],
   },
   {
     value: 'responses',
     short: 'responses',
-    label: 'Responses 接口（OpenAI）',
+    labelKey: 'protocol.responses',
     endpoint: '/responses',
     defaultModels: ['gpt-6-astra', 'gpt-6.1-sol', 'gpt-6-luna', 'gpt-4.1', 'gpt-4o'],
   },
   {
     value: 'messages',
     short: 'messages',
-    label: 'Messages 接口（Claude）',
+    labelKey: 'protocol.messages',
     endpoint: '/messages',
     defaultModels: ['claude-fable-5-1', 'claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5'],
   },
@@ -99,108 +108,37 @@ export const MESSAGES_MAX_TOKENS = 8192;
 /** Anthropic Messages 接口要求的版本号 */
 export const ANTHROPIC_VERSION = '2023-06-01';
 
-/** 思考等级选项 */
+/** 思考等级选项（default 表示不发送任何思考参数；labelKey 指向 i18n 字典） */
 export const THINKING_LEVELS = [
-  { value: 'auto', label: '自动（不发送思考参数）' },
-  { value: 'off', label: '关闭' },
-  { value: 'low', label: '低' },
-  { value: 'medium', label: '中' },
-  { value: 'high', label: '高' },
+  { value: 'default', labelKey: 'thinking.default' },
+  { value: 'low', labelKey: 'thinking.low' },
+  { value: 'medium', labelKey: 'thinking.medium' },
+  { value: 'high', labelKey: 'thinking.high' },
+  { value: 'xhigh', labelKey: 'thinking.xhigh' },
+  { value: 'max', labelKey: 'thinking.max' },
 ];
 
 /**
- * 思考参数的预设方案。
- *
- * 不同协议 / 供应商 / 模型对「思考等级」的支持方式完全不同，因此这里只提供参数模板：
- * 参数名（支持 `a.b` 形式的点号路径）、取值类型与各等级取值都可以由用户改写，
- * 不发送任何未配置的参数。`protocols` 声明该预设适用于哪些协议。
+ * Messages 协议的思考档位 → thinking.budget_tokens。
+ * 取值需小于 MESSAGES_MAX_TOKENS（本工具固定 8192）。
  */
-export const THINKING_PRESETS = [
-  {
-    id: 'none',
-    label: '不发送思考参数（默认，兼容性最好）',
-    protocols: ['chat', 'responses', 'messages'],
-    paramName: '',
-    valueType: 'string',
-    values: { off: '', low: '', medium: '', high: '' },
-  },
-  {
-    id: 'reasoning_effort',
-    label: 'reasoning_effort（OpenAI 风格）',
-    protocols: ['chat'],
-    paramName: 'reasoning_effort',
-    valueType: 'string',
-    values: { off: 'none', low: 'low', medium: 'medium', high: 'high' },
-  },
-  {
-    id: 'enable_thinking',
-    label: 'enable_thinking（布尔型，如 Qwen / DashScope）',
-    protocols: ['chat'],
-    paramName: 'enable_thinking',
-    valueType: 'boolean',
-    values: { off: 'false', low: 'true', medium: 'true', high: 'true' },
-  },
-  {
-    id: 'thinking_budget',
-    label: 'thinking_budget（token 预算，数字型）',
-    protocols: ['chat'],
-    paramName: 'thinking_budget',
-    valueType: 'number',
-    values: { off: '0', low: '1024', medium: '4096', high: '16384' },
-  },
-  {
-    id: 'responses_effort',
-    label: 'reasoning.effort（Responses 原生参数）',
-    protocols: ['responses'],
-    paramName: 'reasoning.effort',
-    valueType: 'string',
-    values: { off: '', low: 'low', medium: 'medium', high: 'high' },
-  },
-  {
-    id: 'messages_budget',
-    label: 'thinking.budget_tokens（Messages 原生参数）',
-    protocols: ['messages'],
-    paramName: 'thinking.budget_tokens',
-    valueType: 'number',
-    values: { off: '', low: '1024', medium: '2048', high: '4096' },
-  },
-  {
-    id: 'custom',
-    label: '自定义参数名与取值',
-    protocols: ['chat', 'responses', 'messages'],
-    paramName: '',
-    valueType: 'string',
-    values: { off: '', low: '', medium: '', high: '' },
-  },
-];
+export const THINKING_BUDGETS = {
+  low: 1024,
+  medium: 2048,
+  high: 4096,
+  xhigh: 6144,
+  max: 7168,
+};
 
-/** 默认思考参数配置（默认不发送任何思考参数） */
+/** 归一化思考等级（未知值一律回退到「默认」） */
+export function getThinkingLevel(value) {
+  return THINKING_LEVELS.some((item) => item.value === value) ? value : 'default';
+}
+
+/** 默认思考配置（默认不发送任何思考参数） */
 export function createDefaultThinking() {
-  const preset = THINKING_PRESETS[0];
-  return {
-    level: 'auto',
-    enabled: false,
-    presetId: preset.id,
-    paramName: preset.paramName,
-    valueType: preset.valueType,
-    values: { ...preset.values },
-  };
+  return { level: 'default' };
 }
-
-/**
- * 取得适用于指定协议的思考参数预设。
- * @param {string} protocol
- */
-export function getThinkingPresets(protocol) {
-  return THINKING_PRESETS.filter((item) => item.protocols.includes(protocol));
-}
-
-/** 值类型选项（用于自定义思考参数取值） */
-export const VALUE_TYPES = [
-  { value: 'string', label: '字符串' },
-  { value: 'number', label: '数字' },
-  { value: 'boolean', label: '布尔值' },
-];
 
 /** 接口端点路径（相对于 Base URL；各协议的推理端点见 PROTOCOLS） */
 export const ENDPOINTS = {

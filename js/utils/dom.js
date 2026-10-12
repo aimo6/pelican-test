@@ -3,6 +3,7 @@
  */
 
 import { icon } from './icons.js';
+import { t } from './i18n.js';
 
 /** 这些 key 直接写入 DOM 属性（property），其余走 setAttribute */
 const PROP_KEYS = new Set([
@@ -143,9 +144,9 @@ export function formatTime(timestamp, now = Date.now()) {
   if (!timestamp) return '—';
   const diff = now - timestamp;
   if (diff < 0) return formatFullTime(timestamp);
-  if (diff < 60000) return '刚刚';
-  if (diff < 3600000) return `${Math.floor(diff / 60000)} 分钟前`;
-  if (diff < 86400000) return `${Math.floor(diff / 3600000)} 小时前`;
+  if (diff < 60000) return t('time.justNow');
+  if (diff < 3600000) return t('time.minutesAgo', { n: Math.floor(diff / 60000) });
+  if (diff < 86400000) return t('time.hoursAgo', { n: Math.floor(diff / 3600000) });
   const date = new Date(timestamp);
   const base = `${pad2(date.getMonth() + 1)}-${pad2(date.getDate())} ${pad2(date.getHours())}:${pad2(date.getMinutes())}`;
   if (date.getFullYear() === new Date(now).getFullYear()) return base;
@@ -221,7 +222,7 @@ export function uid(prefix = 'id') {
  * @param {boolean} busy
  * @param {string} [busyText]
  */
-export function setButtonBusy(button, busy, busyText = '处理中…') {
+export function setButtonBusy(button, busy, busyText = t('common.processing')) {
   if (!button) return;
   if (busy) {
     if (!button.dataset.originalHtml) button.dataset.originalHtml = button.innerHTML;

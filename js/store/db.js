@@ -10,6 +10,7 @@
  */
 
 import { DB_NAME, DB_VERSION, HISTORY_LIMIT } from '../config.js';
+import { t } from '../utils/i18n.js';
 
 export class StorageError extends Error {
   /**
@@ -54,16 +55,16 @@ function isIndexedDbSupported() {
 function toStorageError(error, fallbackKind = 'unknown') {
   if (error instanceof StorageError) return error;
   const name = error && error.name ? String(error.name) : '';
-  const message = error && error.message ? String(error.message) : String(error || '未知错误');
+  const message = error && error.message ? String(error.message) : String(error || t('common.unknownError'));
 
   if (name === 'QuotaExceededError' || /quota/i.test(message)) {
-    return new StorageError('浏览器本地存储空间不足，写入失败。', {
+    return new StorageError(t('storage.quotaWrite'), {
       kind: 'quota',
       cause: error,
     });
   }
   return new StorageError(
-    fallbackKind === 'read' ? `读取本地数据失败：${message}` : `写入本地数据失败：${message}`,
+    fallbackKind === 'read' ? t('storage.readFailed', { message }) : t('storage.writeFailed', { message }),
     { kind: fallbackKind, cause: error },
   );
 }
@@ -77,10 +78,7 @@ export async function initStorage() {
     mode = 'memory';
     return {
       mode,
-      error: new StorageError(
-        '当前浏览器环境不支持 IndexedDB（可能处于隐私模式或被浏览器策略禁用），已临时改用内存存储。',
-        { kind: 'unavailable' },
-      ),
+      error: new StorageError(t('storage.unavailable'), { kind: 'unavailable' }),
     };
   }
 
@@ -118,11 +116,7 @@ export async function initStorage() {
 
       request.onerror = () => reject(toStorageError(request.error, 'write'));
       request.onblocked = () =>
-        reject(
-          new StorageError('本地数据库被其他标签页占用，请关闭本站的其他标签页后刷新重试。', {
-            kind: 'unavailable',
-          }),
-        );
+        reject(new StorageError(t('storage.blocked'), { kind: 'unavailable' }));
     });
 
     await dbPromise;

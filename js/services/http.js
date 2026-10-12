@@ -13,6 +13,7 @@
  */
 
 import { redactSecret } from '../utils/base64.js';
+import { t } from '../utils/i18n.js';
 import { describeUrl } from '../utils/url.js';
 import { desktopBridge } from '../utils/platform.js';
 
@@ -33,54 +34,42 @@ export class ApiError extends Error {
   }
 }
 
-/** 把 HTTP 状态码翻译成中文说明 */
+/** 把 HTTP 状态码翻译成可读说明 */
 function describeHttpStatus(status) {
   if (status === 400) {
-    return {
-      message: '请求被接口拒绝（HTTP 400）。',
-      hint: '常见原因：模型名称不正确、参数不被支持，或请求体格式不符合该接口要求。',
-    };
+    return { message: t('http.400.message'), hint: t('http.400.hint') };
   }
   if (status === 401) {
-    return {
-      message: '认证失败（HTTP 401）。',
-      hint: '请检查 API Key 是否正确、是否已过期，以及是否需要带 Bearer 前缀。',
-    };
+    return { message: t('http.401.message'), hint: t('http.401.hint') };
   }
   if (status === 403) {
-    return {
-      message: '没有访问权限（HTTP 403）。',
-      hint: 'API Key 可能无权访问该模型，或该模型未开通。',
-    };
+    return { message: t('http.403.message'), hint: t('http.403.hint') };
   }
   if (status === 404) {
-    return {
-      message: '接口路径不存在（HTTP 404）。',
-      hint: '请检查 Base URL 是否完整，例如是否需要包含 /v1；本工具不会自动补 /v1。',
-    };
+    return { message: t('http.404.message'), hint: t('http.404.hint') };
   }
   if (status === 405) {
-    return { message: '请求方法不被支持（HTTP 405）。', hint: '该地址可能不是所选协议对应的接口。' };
+    return { message: t('http.405.message'), hint: t('http.405.hint') };
   }
   if (status === 408 || status === 504) {
     return {
-      message: `接口响应超时（HTTP ${status}）。`,
-      hint: 'HTTP 504 是链路上某一层等待上游超时后返回的，最常见的是网关 / 反向代理（如 nginx 的 proxy_read_timeout，默认 60 秒）。这不是浏览器侧超时，调大本工具的超时没有用，需要调大那一层的超时，或换用响应更快的模型。',
+      message: t('http.408.message', { status }),
+      hint: t('http.408.hint'),
     };
   }
   if (status === 413) {
-    return { message: '请求体过大（HTTP 413）。', hint: '请缩短提示词后重试。' };
+    return { message: t('http.413.message'), hint: t('http.413.hint') };
   }
   if (status === 422) {
-    return { message: '请求参数校验失败（HTTP 422）。', hint: '接口不接受当前参数，请检查模型名称与思考参数配置。' };
+    return { message: t('http.422.message'), hint: t('http.422.hint') };
   }
   if (status === 429) {
-    return { message: '请求过于频繁，已触发限流（HTTP 429）。', hint: '请稍后重试，或检查账号配额。' };
+    return { message: t('http.429.message'), hint: t('http.429.hint') };
   }
   if (status >= 500) {
-    return { message: `接口服务端错误（HTTP ${status}）。`, hint: '这通常是供应商侧的问题，可以稍后重试。' };
+    return { message: t('http.5xx.message', { status }), hint: t('http.5xx.hint') };
   }
-  return { message: `请求失败（HTTP ${status}）。`, hint: '' };
+  return { message: t('http.other.message', { status }), hint: '' };
 }
 
 /** 从错误响应体中尽力提取可读信息 */
@@ -97,7 +86,7 @@ function extractErrorDetail(payload, fallbackText) {
   if (!text) return '';
   // 返回的是 HTML（例如登录页 / 网关错误页）时只提示类型，避免把整页 HTML 塞进界面
   if (/^\s*<(!doctype|html|head|body)/i.test(text)) {
-    return '接口返回的是 HTML 页面而不是 JSON，通常说明地址指向了网页而不是 API。';
+    return t('http.htmlDetail');
   }
   return text.slice(0, 400);
 }
@@ -149,10 +138,10 @@ async function describeConnectionFailure(url, error, secret) {
 
   // 混合内容是静态可判定的，不需要发探测请求
   if (window.location.protocol === 'https:' && /^http:\/\//i.test(url)) {
-    return new ApiError('请求被浏览器拦截：HTTPS 页面不允许访问 HTTP 接口（混合内容）。', {
+    return new ApiError(t('http.mixedContent.message'), {
       kind: 'network',
       detail,
-      hint: `接口地址是 ${target}。请把 Base URL 改成 https，或改用 http 打开本页面。`,
+      hint: t('http.mixedContent.hint', { target }),
     });
   }
 
@@ -160,29 +149,25 @@ async function describeConnectionFailure(url, error, secret) {
 
   if (reachability === 'reachable') {
     const origin = window.location.origin;
-    return new ApiError('接口有响应，但响应被浏览器拦截（缺少跨域头）。', {
+    return new ApiError(t('http.cors.message'), {
       kind: 'network',
       detail,
-      hint:
-        `服务器对 ${target} 是有响应的，但响应里没有 Access-Control-Allow-Origin，` +
-        '浏览器因此拒绝把状态码交给页面——所以这里看不到真实的 HTTP 状态码（可能是 401/404，也可能是网关生成的 504）。' +
-        `请到 DevTools → Network 查看该请求的真实状态码。若要前端直接调用，需要接口方放行来源 ${origin}，` +
-        '并允许 authorization、content-type 等请求头（OPTIONS 预检）。',
+      hint: t('http.cors.hint', { target, origin }),
     });
   }
 
   if (reachability === 'unreachable') {
-    return new ApiError('无法连接到接口：网络层完全无响应。', {
+    return new ApiError(t('http.unreachable.message'), {
       kind: 'network',
       detail,
-      hint: `请求地址 ${target} 没有任何响应。常见原因：域名解析失败、端口未开放、服务未启动，或本机网络 / DNS 异常。可先用 curl 直接请求该地址验证。`,
+      hint: t('http.unreachable.hint', { target }),
     });
   }
 
-  return new ApiError('无法连接到接口。', {
+  return new ApiError(t('http.probeTimeout.message'), {
     kind: 'network',
     detail,
-    hint: `探测请求也超时了，无法确定原因。请求地址 ${target}。常见原因：Base URL 写错、接口未开启 CORS 跨域、网络不可达，或服务响应极慢。`,
+    hint: t('http.probeTimeout.hint', { target }),
   });
 }
 
@@ -201,47 +186,46 @@ function describeDesktopFailure(url, error, secret) {
   const raw = String((error && error.message) || error || '');
   const detail = redactSecret(raw, secret);
   const target = describeUrl(url);
-  const at = (text) => `请求地址 ${target}。${text}`;
 
   if (/ERR_NAME_NOT_RESOLVED|ERR_NAME_RESOLUTION_FAILED/i.test(raw)) {
-    return new ApiError('无法解析接口域名。', {
+    return new ApiError(t('http.dns.message'), {
       kind: 'network',
       detail,
-      hint: at('请检查 Base URL 中的域名拼写，以及本机 DNS 是否正常。'),
+      hint: t('http.dns.hint', { target }),
     });
   }
   if (/ERR_CONNECTION_REFUSED|ERR_CONNECTION_RESET|ERR_CONNECTION_CLOSED|ERR_EMPTY_RESPONSE/i.test(raw)) {
-    return new ApiError('无法连接到接口：连接被拒绝或中断。', {
+    return new ApiError(t('http.refused.message'), {
       kind: 'network',
       detail,
-      hint: at('请确认该地址可访问、端口已开放、服务已启动。'),
+      hint: t('http.refused.hint', { target }),
     });
   }
   if (/ERR_CONNECTION_TIMED_OUT|ERR_TIMED_OUT|ERR_ADDRESS_UNREACHABLE/i.test(raw)) {
-    return new ApiError('连接接口超时。', {
+    return new ApiError(t('http.connectTimeout.message'), {
       kind: 'timeout',
       detail,
-      hint: at('请检查网络是否可达、目标服务是否在正常运行。'),
+      hint: t('http.connectTimeout.hint', { target }),
     });
   }
   if (/ERR_CERT|ERR_SSL/i.test(raw)) {
-    return new ApiError('接口 HTTPS 证书校验失败。', {
+    return new ApiError(t('http.cert.message'), {
       kind: 'network',
       detail,
-      hint: at('请检查该地址的证书配置是否有效。'),
+      hint: t('http.cert.hint', { target }),
     });
   }
   if (/ERR_INTERNET_DISCONNECTED|ERR_NETWORK_CHANGED|ERR_PROXY/i.test(raw)) {
-    return new ApiError('本机网络不可用。', {
+    return new ApiError(t('http.offline.message'), {
       kind: 'network',
       detail,
-      hint: '请检查本机网络连接（或代理设置）后重试。',
+      hint: t('http.offline.hint'),
     });
   }
-  return new ApiError('无法连接到接口。', {
+  return new ApiError(t('http.desktopUnknown.message'), {
     kind: 'network',
     detail,
-    hint: at('请检查地址、网络和接口服务状态。'),
+    hint: t('http.desktopUnknown.hint', { target }),
   });
 }
 
@@ -359,13 +343,13 @@ export async function requestJson(url, options = {}) {
   } catch (error) {
     cleanup();
     if (timedOut) {
-      throw new ApiError(`请求超时（超过 ${Math.round(timeoutMs / 1000)} 秒未收到响应）。`, {
+      throw new ApiError(t('http.timeout.message', { seconds: Math.round(timeoutMs / 1000) }), {
         kind: 'timeout',
-        hint: '可以点击取消后重试，或换用响应更快的模型。',
+        hint: t('http.timeout.hint'),
       });
     }
     if (canceled) {
-      throw new ApiError('请求已取消。', { kind: 'canceled' });
+      throw new ApiError(t('http.canceled'), { kind: 'canceled' });
     }
     // 桌面端：原生侧能给出真实的网络错误码；
     // 网页端：fetch 抛 TypeError，可能是网络不可达，也可能是响应被浏览器 CORS 策略拦截，需要探测区分
@@ -378,8 +362,8 @@ export async function requestJson(url, options = {}) {
     text = await response.text();
   } catch (error) {
     cleanup();
-    if (canceled) throw new ApiError('请求已取消。', { kind: 'canceled' });
-    throw new ApiError('读取响应内容失败。', {
+    if (canceled) throw new ApiError(t('http.canceled'), { kind: 'canceled' });
+    throw new ApiError(t('http.readFailed'), {
       kind: 'network',
       detail: redactSecret(String(error && error.message ? error.message : error), secret),
     });
@@ -411,23 +395,44 @@ export async function requestJson(url, options = {}) {
 
   if (jsonError) {
     const looksLikeHtml = /^\s*</.test(safeText);
-    throw new ApiError('接口返回的内容不是合法 JSON。', {
+    throw new ApiError(t('http.invalidJson.message'), {
       kind: 'json',
       status: response.status,
       detail: safeText.slice(0, 300),
-      hint: looksLikeHtml
-        ? '返回的是 HTML 页面，通常说明 Base URL 指向了网页而不是 API，或中间存在需要登录的代理。'
-        : '请确认该地址与所选协议匹配（chat / responses / messages）。',
+      hint: looksLikeHtml ? t('http.invalidJson.hintHtml') : t('http.invalidJson.hintProtocol'),
     });
   }
 
   if (data && typeof data === 'object' && data.error && !data.choices) {
     // 少数网关会返回 HTTP 200 但 body 里带 error
     const detail = extractErrorDetail(data, '');
-    throw new ApiError('接口返回了错误信息。', { kind: 'http', status: response.status, detail });
+    throw new ApiError(t('http.bodyError'), { kind: 'http', status: response.status, detail });
   }
 
   return { data, text: safeText, status: response.status, url };
+}
+
+/**
+ * 判断一次失败是否值得自动重试。
+ *
+ * 只覆盖「可能靠重试恢复」的失败：
+ * - timeout：本工具侧超时 / 桌面端的连接超时
+ * - HTTP 408 / 429 / 5xx：链路或上游的瞬时故障、限流
+ *
+ * 配置类错误（400 / 401 / 403 / 404 / 422、CORS、DNS、证书等）重试没有意义，
+ * 取消（canceled）与响应格式错误同样不重试。
+ *
+ * @param {unknown} error
+ * @returns {boolean}
+ */
+export function isRetryableError(error) {
+  if (!(error instanceof ApiError)) return false;
+  if (error.kind === 'timeout') return true;
+  if (error.kind === 'http') {
+    const status = error.status;
+    return status === 408 || status === 429 || (status >= 500 && status < 600);
+  }
+  return false;
 }
 
 /**
@@ -445,7 +450,7 @@ export function describeError(error) {
     };
   }
   return {
-    message: '发生未知错误。',
+    message: t('http.unknownError'),
     hint: '',
     detail: String((error && error.message) || error || ''),
     kind: 'unknown',

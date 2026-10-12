@@ -5,12 +5,15 @@
  * 通过 state.promptRevision 响应外部恢复（点击历史记录、加载示例等）。
  * 底部操作栏分两行：上行是「供应商 → 协议 → 模型」的配置选择，
  * 下行是运行状态与「开始测试」，纵向空间尽量留给 SVG 结果面板。
+ *
+ * 语言切换：只更新静态文案与 placeholder，绝不改写 textarea 的草稿内容。
  */
 
-import { CONNECTION_STATUS, DEFAULT_PROMPT } from '../config.js';
-import { clear, el } from '../utils/dom.js';
+import { el } from '../utils/dom.js';
 import { icon } from '../utils/icons.js';
+import { t } from '../utils/i18n.js';
 import { createModelSelect } from './modelSelect.js';
+import { createSelect } from './select.js';
 
 /**
  * @param {import('../store/state.js').store} store
@@ -24,7 +27,7 @@ export function createPromptPanel(store, controller) {
     class: 'textarea',
     id: 'prompt-input',
     rows: 2,
-    placeholder: '描述你希望模型生成的 SVG，例如：使用 SVG 绘制一个戴着蓝色帽子的鹈鹕在海边骑自行车的 2D 动画。',
+    placeholder: t('prompt.placeholder'),
     spellcheck: false,
     onInput: () => {
       updateCounter();
@@ -42,20 +45,17 @@ export function createPromptPanel(store, controller) {
 
   /* ---------------------------- 供应商与模型 ---------------------------- */
 
-  const supplierSelect = el('select', {
-    class: 'select select--compact',
-    title: '切换供应商',
-    onChange: (event) => store.selectSupplier(event.target.value),
+  const supplierSelect = createSelect({
+    title: t('prompt.selectProvider'),
+    onChange: (value) => store.selectSupplier(value),
   });
 
   const modelSelect = createModelSelect(store);
 
-  const connectionBadge = el('span', { class: 'badge badge--muted' });
-
   const editSupplierBtn = el('button', {
     class: 'icon-btn icon-btn--sm',
     type: 'button',
-    title: '编辑当前供应商配置',
+    title: t('prompt.editProvider'),
     html: icon('pencil', { size: 14 }),
     onClick: () => {
       const supplier = store.getCurrentSupplier();
@@ -64,28 +64,27 @@ export function createPromptPanel(store, controller) {
   });
 
   const supplierGroup = el('div', { class: 'prompt__supplier' }, [
-    supplierSelect,
+    supplierSelect.root,
     modelSelect.root,
-    connectionBadge,
     editSupplierBtn,
   ]);
 
   const addSupplierBtn = el('button', {
     class: 'btn btn--sm',
     type: 'button',
-    html: `${icon('plus', { size: 14 })}<span>添加供应商</span>`,
+    html: `${icon('plus', { size: 14 })}<span>${t('prompt.addProvider')}</span>`,
     onClick: () => store.openSupplierModal(null),
   });
 
+  const supplierEmptyHint = el('span', { class: 'prompt__supplier-hint', text: t('prompt.noProvider') });
   const supplierEmpty = el('div', { class: 'prompt__supplier', hidden: true }, [
-    el('span', { class: 'prompt__supplier-hint', text: '尚未配置供应商' }),
+    supplierEmptyHint,
     addSupplierBtn,
   ]);
 
   /* ------------------------------- 运行 ------------------------------- */
 
   const runBtn = el('button', { class: 'btn btn--primary', type: 'button' });
-  runBtn.innerHTML = `${icon('play', { size: 15 })}<span>开始测试</span>`;
   runBtn.addEventListener('click', submit);
 
   const cancelBtn = el('button', {
@@ -93,7 +92,6 @@ export function createPromptPanel(store, controller) {
     type: 'button',
     onClick: () => controller.cancelRun(),
   });
-  cancelBtn.innerHTML = `${icon('stop', { size: 14 })}<span>取消请求</span>`;
 
   const statusText = el('span', { class: 'prompt__status' });
 
@@ -102,9 +100,9 @@ export function createPromptPanel(store, controller) {
   const loadExampleBtn = el('button', {
     class: 'link-btn',
     type: 'button',
-    text: '载入示例',
+    text: t('prompt.loadExample'),
     onClick: () => {
-      textarea.value = DEFAULT_PROMPT;
+      textarea.value = t('prompt.example');
       updateCounter();
       textarea.focus();
     },
@@ -113,7 +111,7 @@ export function createPromptPanel(store, controller) {
   const clearPromptBtn = el('button', {
     class: 'link-btn',
     type: 'button',
-    text: '清空',
+    text: t('prompt.clear'),
     onClick: () => {
       textarea.value = '';
       updateCounter();
@@ -121,13 +119,15 @@ export function createPromptPanel(store, controller) {
     },
   });
 
+  const shortcutHint = el('span', { class: 'prompt__shortcut', text: t('prompt.shortcut') });
+
   const root = el('section', { class: 'panel prompt' }, [
     el('div', { class: 'prompt__body' }, [
       textarea,
       el('div', { class: 'prompt__foot' }, [
-        el('div', { class: 'prompt__foot-actions' }, [loadExampleBtn, clearPromptBtn]),
-        el('span', { class: 'prompt__spacer' }),
         counter,
+        el('span', { class: 'prompt__spacer' }),
+        el('div', { class: 'prompt__foot-actions' }, [loadExampleBtn, clearPromptBtn]),
       ]),
     ]),
     errorBox,
@@ -137,7 +137,7 @@ export function createPromptPanel(store, controller) {
         statusText,
         el('span', { class: 'prompt__spacer' }),
         cancelBtn,
-        el('span', { class: 'prompt__shortcut', text: 'Ctrl / ⌘ + Enter 提交' }),
+        shortcutHint,
         runBtn,
       ]),
     ]),
@@ -145,13 +145,30 @@ export function createPromptPanel(store, controller) {
 
   function updateCounter() {
     const length = textarea.value.length;
-    counter.textContent = length ? `${length} 字符` : '';
+    counter.textContent = length ? t('prompt.counter', { n: length }) : '';
+  }
+
+  /** 语言变化时更新静态文案（不触碰 textarea 内容） */
+  let renderedLocale = null;
+  function applyLocaleIfNeeded() {
+    if (store.state.locale === renderedLocale) return;
+    renderedLocale = store.state.locale;
+    textarea.placeholder = t('prompt.placeholder');
+    supplierSelect.trigger.title = t('prompt.selectProvider');
+    editSupplierBtn.title = t('prompt.editProvider');
+    addSupplierBtn.innerHTML = `${icon('plus', { size: 14 })}<span>${t('prompt.addProvider')}</span>`;
+    supplierEmptyHint.textContent = t('prompt.noProvider');
+    cancelBtn.innerHTML = `${icon('stop', { size: 14 })}<span>${t('prompt.cancel')}</span>`;
+    shortcutHint.textContent = t('prompt.shortcut');
+    loadExampleBtn.textContent = t('prompt.loadExample');
+    clearPromptBtn.textContent = t('prompt.clear');
+    updateCounter();
   }
 
   function submit() {
     const prompt = textarea.value.trim();
     if (!prompt) {
-      controller.showPromptError('请先填写提示词。');
+      controller.showPromptError(t('prompt.required'));
       textarea.focus();
       return;
     }
@@ -176,7 +193,7 @@ export function createPromptPanel(store, controller) {
     );
   }
 
-  /** 渲染供应商选择器与连接状态（模型部分由 modelSelect 自行渲染） */
+  /** 渲染供应商选择器（模型与思考部分由 modelSelect 自行渲染） */
   function renderSupplier() {
     const { suppliers, currentSupplierId } = store.state;
     const supplier = store.getCurrentSupplier();
@@ -184,38 +201,23 @@ export function createPromptPanel(store, controller) {
     // 模型 / 思考的变化不影响下拉本身，这里不参与签名，避免每敲一键就重建下拉
     const signature = [
       currentSupplierId,
-      ...suppliers.map((item) => [item.id, item.name, item.connection?.status].join(':')),
+      ...suppliers.map((item) => [item.id, item.name].join(':')),
     ].join('|');
 
     if (signature !== supplierSignature) {
       supplierSignature = signature;
-      clear(supplierSelect);
-      for (const item of suppliers) {
-        supplierSelect.appendChild(
-          el('option', {
-            value: item.id,
-            text: item.name,
-            selected: item.id === currentSupplierId,
-          }),
-        );
-      }
+      supplierSelect.setOptions(suppliers.map((item) => ({ value: item.id, label: item.name })));
+      supplierSelect.setValue(currentSupplierId || '');
     }
 
     supplierGroup.hidden = !supplier;
     supplierEmpty.hidden = Boolean(supplier);
-    if (!supplier) return;
-
-    const connection = supplier.connection || { status: 'untested' };
-    const connectionMeta = CONNECTION_STATUS[connection.status] || CONNECTION_STATUS.untested;
-    connectionBadge.className = `badge badge--${connectionMeta.tone}`;
-    connectionBadge.textContent = connectionMeta.label;
-    connectionBadge.title = connection.message
-      ? `${connectionMeta.label}：${connection.message}`
-      : connectionMeta.label;
   }
 
   function render() {
     const { promptRevision, prompt, run } = store.state;
+
+    applyLocaleIfNeeded();
 
     if (promptRevision !== revision) {
       revision = promptRevision;
@@ -231,28 +233,26 @@ export function createPromptPanel(store, controller) {
     const hasModel = Boolean(supplier && supplier.model);
     runBtn.disabled = running || !hasSupplier || !hasModel;
     runBtn.title = !hasSupplier
-      ? '请先添加并选择一个供应商'
+      ? t('prompt.runNoProvider')
       : !hasModel
-        ? '请先在配置行填写或拉取模型'
+        ? t('prompt.runNoModel')
         : '';
     runBtn.classList.toggle('is-busy', running);
     runBtn.innerHTML = running
-      ? `${icon('loader', { size: 15, className: 'spin' })}<span>请求中…</span>`
-      : `${icon('play', { size: 15 })}<span>开始测试</span>`;
+      ? `${icon('loader', { size: 15, className: 'spin' })}<span>${t('prompt.running')}</span>`
+      : `${icon('play', { size: 15 })}<span>${t('prompt.run')}</span>`;
     cancelBtn.hidden = !running;
 
     if (run.status === 'running') {
-      statusText.textContent = '正在调用模型，请稍候…';
+      // 自动重试期间 run.note 会带上「第 n/N 次尝试」的进度，优先展示
+      statusText.textContent = run.note || t('prompt.statusRunning');
       statusText.className = 'prompt__status is-loading';
     } else if (run.status === 'canceled') {
-      statusText.textContent = '请求已取消';
+      statusText.textContent = t('prompt.statusCanceled');
       statusText.className = 'prompt__status';
     } else if (run.status === 'success') {
-      statusText.textContent = run.note || '请求完成';
+      statusText.textContent = run.note || t('prompt.statusDone');
       statusText.className = 'prompt__status is-ok';
-    } else if (run.status === 'error') {
-      statusText.textContent = '';
-      statusText.className = 'prompt__status';
     } else {
       statusText.textContent = '';
       statusText.className = 'prompt__status';

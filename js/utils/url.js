@@ -9,6 +9,7 @@
  * 跨域相关的提示只在网页版给出：桌面端由主进程发请求，不存在同源策略限制。
  */
 
+import { t } from './i18n.js';
 import { isDesktop } from './platform.js';
 
 /** 已知的端点后缀，拼接前需要从 Base URL 中剥离 */
@@ -59,7 +60,7 @@ export function normalizeBaseUrl(raw) {
 export function validateBaseUrl(raw) {
   const trimmed = String(raw ?? '').trim();
   if (!trimmed) {
-    return { ok: false, url: '', normalized: '', error: '请填写 Base URL', warning: null };
+    return { ok: false, url: '', normalized: '', error: t('url.required'), warning: null };
   }
 
   let parsed;
@@ -70,7 +71,7 @@ export function validateBaseUrl(raw) {
       ok: false,
       url: '',
       normalized: '',
-      error: 'Base URL 不是合法的绝对地址，请检查是否漏写了 https://',
+      error: t('url.invalid'),
       warning: null,
     };
   }
@@ -80,7 +81,7 @@ export function validateBaseUrl(raw) {
       ok: false,
       url: parsed.href,
       normalized: '',
-      error: `不支持的协议 ${parsed.protocol}，请使用 http 或 https`,
+      error: t('url.unsupportedProtocol', { protocol: parsed.protocol }),
       warning: null,
     };
   }
@@ -88,10 +89,9 @@ export function validateBaseUrl(raw) {
   const normalized = normalizeBaseUrl(trimmed);
   let warning = null;
   if (parsed.protocol === 'http:' && !isDesktop && window.location.protocol === 'https:') {
-    warning =
-      '当前页面通过 HTTPS 打开，浏览器会拦截 HTTPS → HTTP 的混合内容请求。建议改用 https 地址或通过 http 打开本页面。';
+    warning = t('url.mixedContentWarning');
   } else if (!isDesktop && (parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1')) {
-    warning = '本地地址需要在允许跨域的本地服务上运行，请确认该服务已开启 CORS。';
+    warning = t('url.localhostWarning');
   }
 
   return { ok: true, url: parsed.href, normalized, error: null, warning };

@@ -7,10 +7,10 @@
  */
 
 import { getProtocol } from '../config.js';
-import { clear, copyText, downloadFile, el, formatDuration, formatFullTime, formatTime } from '../utils/dom.js';
+import { clear, el, formatDuration, formatFullTime, formatTime } from '../utils/dom.js';
 import { icon } from '../utils/icons.js';
-import { createSvgBlobUrl, ensureSvgSize, svgFileName } from '../utils/svg.js';
-import { toastError, toastSuccess } from './toast.js';
+import { t } from '../utils/i18n.js';
+import { createSvgBlobUrl, ensureSvgSize } from '../utils/svg.js';
 
 const MIN_SCALE = 0.05;
 const MAX_SCALE = 16;
@@ -26,69 +26,28 @@ export function createSvgViewer(store) {
   let objectUrl = null;
   let naturalSize = { width: 800, height: 600 };
   const view = { scale: 1, x: 0, y: 0, mode: /** @type {'fit'|'free'} */ ('fit') };
-  let sideOpen = false;
-  let activeTab = 'svg';
   let dragging = null;
   let renderedResultRef = null;
 
   /* ------------------------------ DOM 结构 ------------------------------ */
-  const img = el('img', { class: 'viewer__img', alt: 'SVG 生成结果预览' });
+  const img = el('img', { class: 'viewer__img', alt: t('viewer.alt') });
   const stage = el('div', { class: 'viewer__stage' }, img);
   const overlay = el('div', { class: 'viewer__overlay' });
   const canvas = el(
     'div',
     {
       class: 'viewer__canvas',
-      title: '拖拽平移 · Ctrl / ⌘ + 滚轮缩放 · 双击复位',
+      title: t('viewer.canvasTitle'),
     },
     [stage, overlay],
   );
 
-  const statusBadge = el('span', { class: 'badge badge--muted', text: '等待测试' });
+  const statusBadge = el('span', { class: 'badge badge--muted', text: t('viewer.badgeWaiting') });
   const metaText = el('span', { class: 'viewer__meta' });
 
-  const sourceBtn = el('button', { class: 'btn btn--sm', type: 'button' });
-  sourceBtn.innerHTML = `${icon('code', { size: 14 })}<span>查看源码</span>`;
-  const rawBtn = el('button', { class: 'btn btn--sm', type: 'button' });
-  rawBtn.innerHTML = `${icon('fileText', { size: 14 })}<span>原始响应</span>`;
-  const copyBtn = el('button', { class: 'btn btn--sm', type: 'button' });
-  copyBtn.innerHTML = `${icon('copy', { size: 14 })}<span>复制</span>`;
-  const downloadBtn = el('button', { class: 'btn btn--sm', type: 'button' });
-  downloadBtn.innerHTML = `${icon('download', { size: 14 })}<span>下载</span>`;
-  const fullscreenBtn = el('button', { class: 'icon-btn', type: 'button', title: '全屏预览', html: icon('expand', { size: 16 }) });
-
-  const codeBlock = el('pre', { class: 'viewer__code' });
-  const rawBlock = el('pre', { class: 'viewer__code' });
-  const sideNote = el('div', { class: 'viewer__side-note' });
-
-  const tabSvg = el('button', { class: 'tab is-active', type: 'button', text: 'SVG 源码' });
-  const tabRaw = el('button', { class: 'tab', type: 'button', text: '原始响应' });
-  const sideCloseBtn = el('button', { class: 'icon-btn icon-btn--sm', type: 'button', title: '收起', html: icon('x', { size: 14 }) });
-  const sidePanelSvg = el('div', { class: 'viewer__side-panel' }, codeBlock);
-  const sidePanelRaw = el('div', { class: 'viewer__side-panel', hidden: true }, rawBlock);
-
-  const side = el('aside', { class: 'viewer__side', hidden: true }, [
-    el('div', { class: 'viewer__side-head' }, [
-      el('div', { class: 'tabs' }, [tabSvg, tabRaw]),
-      sideCloseBtn,
-    ]),
-    sidePanelSvg,
-    sidePanelRaw,
-    sideNote,
-  ]);
-
   const root = el('section', { class: 'panel viewer' }, [
-    el('div', { class: 'viewer__head' }, [
-      el('div', { class: 'viewer__head-info' }, [statusBadge, metaText]),
-      el('div', { class: 'viewer__head-actions' }, [
-        sourceBtn,
-        rawBtn,
-        copyBtn,
-        downloadBtn,
-        fullscreenBtn,
-      ]),
-    ]),
-    el('div', { class: 'viewer__body' }, [canvas, side]),
+    el('div', { class: 'viewer__head' }, [el('div', { class: 'viewer__head-info' }, [statusBadge, metaText])]),
+    el('div', { class: 'viewer__body' }, [canvas]),
   ]);
 
   /* ------------------------------ 交互 ------------------------------ */
@@ -123,65 +82,6 @@ export function createSvgViewer(store) {
     view.mode = 'free';
     applyTransform();
   }
-
-  fullscreenBtn.addEventListener('click', async () => {
-    try {
-      if (document.fullscreenElement === root) await document.exitFullscreen();
-      else await root.requestFullscreen();
-    } catch (error) {
-      toastError('无法进入全屏', '当前浏览器或环境拒绝了全屏请求。');
-    }
-  });
-
-  document.addEventListener('fullscreenchange', () => {
-    const isFullscreen = document.fullscreenElement === root;
-    fullscreenBtn.innerHTML = icon(isFullscreen ? 'shrink' : 'expand', { size: 16 });
-    fullscreenBtn.title = isFullscreen ? '退出全屏' : '全屏预览';
-    if (view.mode === 'fit') requestAnimationFrame(fit);
-  });
-
-  async function handleCopy() {
-    const svg = store.state.result?.svgSanitized;
-    if (!svg) {
-      toastError('暂无可复制的 SVG 源码');
-      return;
-    }
-    const ok = await copyText(svg);
-    if (ok) toastSuccess('已复制 SVG 源码');
-    else toastError('复制失败', '浏览器拒绝了剪贴板访问，请手动选中源码复制。');
-  }
-
-  function handleDownload() {
-    const svg = store.state.result?.svgSanitized;
-    if (!svg) {
-      toastError('暂无可下载的 SVG');
-      return;
-    }
-    downloadFile(svgFileName(), svg, 'image/svg+xml;charset=utf-8');
-    toastSuccess('已开始下载 SVG 文件');
-  }
-
-  copyBtn.addEventListener('click', handleCopy);
-  downloadBtn.addEventListener('click', handleDownload);
-
-  function setSide(open, tab) {
-    sideOpen = open;
-    if (tab) activeTab = tab;
-    side.hidden = !open;
-    sourceBtn.classList.toggle('is-active', open && activeTab === 'svg');
-    rawBtn.classList.toggle('is-active', open && activeTab === 'raw');
-    tabSvg.classList.toggle('is-active', activeTab === 'svg');
-    tabRaw.classList.toggle('is-active', activeTab === 'raw');
-    sidePanelSvg.hidden = activeTab !== 'svg';
-    sidePanelRaw.hidden = activeTab !== 'raw';
-    if (open && view.mode === 'fit') requestAnimationFrame(fit);
-  }
-
-  sourceBtn.addEventListener('click', () => setSide(!(sideOpen && activeTab === 'svg'), 'svg'));
-  rawBtn.addEventListener('click', () => setSide(!(sideOpen && activeTab === 'raw'), 'raw'));
-  tabSvg.addEventListener('click', () => setSide(true, 'svg'));
-  tabRaw.addEventListener('click', () => setSide(true, 'raw'));
-  sideCloseBtn.addEventListener('click', () => setSide(false));
 
   /* 拖拽平移 */
   canvas.addEventListener('pointerdown', (event) => {
@@ -282,8 +182,8 @@ export function createSvgViewer(store) {
       overlay.appendChild(
         el('div', { class: 'viewer__state' }, [
           el('span', { class: 'viewer__state-icon', html: icon('loader', { size: 22, className: 'spin' }) }),
-          el('div', { class: 'viewer__state-title', text: '正在生成…' }),
-          el('div', { class: 'viewer__state-desc', text: '模型返回后会立即解析并预览 SVG。' }),
+          el('div', { class: 'viewer__state-title', text: t('viewer.stateGenerating') }),
+          el('div', { class: 'viewer__state-desc', text: t('viewer.stateGeneratingDesc') }),
         ]),
       );
       return;
@@ -294,11 +194,8 @@ export function createSvgViewer(store) {
       overlay.appendChild(
         el('div', { class: 'viewer__state' }, [
           el('span', { class: 'viewer__state-icon', html: icon('image', { size: 22 }) }),
-          el('div', { class: 'viewer__state-title', text: '还没有生成结果' }),
-          el('div', {
-            class: 'viewer__state-desc',
-            text: '在上方填写提示词并点击「开始测试」，或从左侧历史记录中恢复一次旧结果。',
-          }),
+          el('div', { class: 'viewer__state-title', text: t('viewer.stateEmptyTitle') }),
+          el('div', { class: 'viewer__state-desc', text: t('viewer.stateEmptyDesc') }),
         ]),
       );
       return;
@@ -318,13 +215,9 @@ export function createSvgViewer(store) {
         el('span', { class: 'viewer__state-icon', html: icon(isError ? 'alert' : 'wand', { size: 22 }) }),
         el('div', {
           class: 'viewer__state-title',
-          text: isError ? '本次测试失败' : '没有解析出可预览的 SVG',
+          text: isError ? t('viewer.stateErrorTitle') : t('viewer.stateNoSvgTitle'),
         }),
-        el('div', { class: 'viewer__state-desc', text: result.error || parseError || '模型输出中不包含 <svg> 片段。' }),
-        el('div', {
-          class: 'viewer__state-desc',
-          text: '原始输出已完整保留，可点击右上角「原始响应」查看模型的实际返回内容。',
-        }),
+        el('div', { class: 'viewer__state-desc', text: result.error || parseError || t('viewer.stateNoSvgDesc') }),
       ]),
     );
   }
@@ -333,19 +226,19 @@ export function createSvgViewer(store) {
     clear(metaText);
     if (!result) {
       statusBadge.className = 'badge badge--muted';
-      statusBadge.textContent = runStatus === 'running' ? '请求中' : '等待测试';
+      statusBadge.textContent = runStatus === 'running' ? t('viewer.badgeRunning') : t('viewer.badgeWaiting');
       return;
     }
 
     const ok = result.status === 'success';
     statusBadge.className = `badge badge--${ok ? 'ok' : 'error'}`;
-    statusBadge.textContent = ok ? '测试成功' : '测试失败';
+    statusBadge.textContent = ok ? t('viewer.badgeOk') : t('viewer.badgeError');
 
     const parts = [
-      result.supplierName || '未记录',
-      result.model || '未记录',
-      result.protocol ? `协议：${getProtocol(result.protocol).short}` : '',
-      result.durationMs ? `耗时 ${formatDuration(result.durationMs)}` : '',
+      result.supplierName || t('common.notRecorded'),
+      result.model || t('common.notRecorded'),
+      result.protocol ? t('viewer.metaProtocol', { name: getProtocol(result.protocol).short }) : '',
+      result.durationMs ? t('viewer.metaDuration', { d: formatDuration(result.durationMs) }) : '',
       formatTime(result.createdAt),
     ].filter(Boolean);
 
@@ -353,24 +246,13 @@ export function createSvgViewer(store) {
     metaText.title = formatFullTime(result.createdAt);
   }
 
-  function renderSide(result) {
-    const svg = result?.svgSanitized || '';
-    codeBlock.textContent = svg || '（本次没有解析出 SVG 源码）';
-    rawBlock.textContent = result?.rawResponse || '（暂无原始响应）';
-
-    const removed = result?.parse?.removed || [];
-    const notes = ['为安全起见，预览与源码均已移除脚本、事件处理器与外部资源引用。'];
-    if (removed.length) notes.push(`已清理：${[...new Set(removed)].join('、')}`);
-    if (result?.parse?.strategy === 'unparsed') notes.push('提示：该片段未通过 XML 校验，预览可能不完整。');
-    if (result?.finishReason === 'length') notes.push('提示：模型输出因长度限制被截断。');
-    sideNote.textContent = notes.join(' ');
-
-    const hasContent = Boolean(svg || result?.rawResponse);
-    copyBtn.disabled = !svg;
-    downloadBtn.disabled = !svg;
-    sourceBtn.disabled = !svg;
-    rawBtn.disabled = !result?.rawResponse;
-    if (!hasContent && sideOpen) setSide(false);
+  /** 语言变化时更新静态文案（overlay 与状态徽章每次渲染都会重建，天然使用新语言） */
+  let renderedLocale = null;
+  function applyLocaleIfNeeded() {
+    if (store.state.locale === renderedLocale) return;
+    renderedLocale = store.state.locale;
+    img.alt = t('viewer.alt');
+    canvas.title = t('viewer.canvasTitle');
   }
 
   function render() {
@@ -378,14 +260,13 @@ export function createSvgViewer(store) {
     const resultChanged = result !== renderedResultRef;
     renderedResultRef = result;
 
+    applyLocaleIfNeeded();
     renderMeta(result, run.status);
     renderOverlay(result, run.status);
 
     if (resultChanged || result?.svgSanitized !== renderedSvg) {
       setSvg(result?.svgSanitized || null);
     }
-
-    renderSide(result);
   }
 
   store.subscribe(render);

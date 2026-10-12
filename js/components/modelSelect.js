@@ -2,29 +2,31 @@
  * 模型选择区（内联在提示词面板底部操作栏，位于供应商选择之后）。
  *
  * - 协议下拉：chat / responses / messages，决定请求端点与请求体格式
- * - 模型输入：可手动输入，也可通过「获取模型」拉取候选
- * - 拉取失败时按当前协议展示默认模型建议
- *   （responses → GPT 系列、messages → Claude 系列、chat → 留空手填）
- * - 「思考」按钮打开思考参数弹窗
+ * - 模型输入：可手动输入；输入框右侧的箭头按钮每次展开都会重新拉取模型列表，
+ *   避免服务端已更新而前端仍展示旧列表；拉取结果按供应商 ID 归档，互不串扰
+ * - 思考下拉：默认不发送思考参数，可选 low / medium / high / xhigh / max，
+ *   发送形式按协议映射（见 services/inference.js）
  *
  * 输入采用「本地输入 + blur 落库」策略：输入时只更新内存状态，
  * 避免 store 通知引发的重渲染把输入框内容覆盖掉。
  */
 
-import { PROTOCOLS, THINKING_LEVELS, getProtocol } from '../config.js';
+import { PROTOCOLS, THINKING_LEVELS, getProtocol, getThinkingLevel } from '../config.js';
 import { decodeApiKey } from '../utils/base64.js';
-import { el, setButtonBusy } from '../utils/dom.js';
+import { el } from '../utils/dom.js';
 import { icon } from '../utils/icons.js';
+import { t } from '../utils/i18n.js';
 import { describeError } from '../services/http.js';
 import { fetchModelList } from '../services/models.js';
 import { createCombobox } from './combobox.js';
-import { createThinkingModal } from './thinkingModal.js';
-import { toastError, toastSuccess } from './toast.js';
+import { createSelect } from './select.js';
+import { toastError } from './toast.js';
 
-const LEVEL_LABELS = THINKING_LEVELS.reduce((acc, item) => {
-  acc[item.value] = item.label.replace('（不发送思考参数）', '');
-  return acc;
-}, /** @type {Record<string,string>} */ ({}));
+/** 协议候选项（label 按当前语言解析） */
+const protocolOptions = () => PROTOCOLS.map((item) => ({ value: item.value, label: t(item.labelKey) }));
+
+/** 思考等级候选项（label 按当前语言解析） */
+const thinkingOptions = () => THINKING_LEVELS.map((item) => ({ value: item.value, label: t(item.labelKey) }));
 
 /**
  * @param {import('../store/state.js').store} store
@@ -32,29 +34,24 @@ const LEVEL_LABELS = THINKING_LEVELS.reduce((acc, item) => {
 export function createModelSelect(store) {
   /** 已拉取到的模型列表缓存（仅内存，按供应商 ID 区分） */
   const modelCache = new Map();
-  const thinkingModal = createThinkingModal(store);
+  /** 正在拉取中的供应商 ID：同一供应商不重复请求，不同供应商互不阻塞 */
+  const fetchingIds = new Set();
 
-  let fetching = false;
-  /** @type {AbortController|null} */
-  let abortController = null;
   /** 上一次渲染的供应商 ID（用于判断是否需要回填输入框） */
   let renderedSupplierId = null;
 
   /* --------------------------- 控件 --------------------------- */
 
-  const protocolSelect = el(
-    'select',
-    {
-      class: 'select select--compact',
-      title: '接口协议',
-      onChange: (event) => handleProtocolChange(event.target.value),
-    },
-    PROTOCOLS.map((item) => el('option', { value: item.value, text: item.label })),
-  );
+  const protocolSelect = createSelect({
+    title: t('model.protocolTitle'),
+    value: PROTOCOLS[0].value,
+    options: protocolOptions(),
+    onChange: (value) => handleProtocolChange(value),
+  });
 
   const modelCombobox = createCombobox({
     id: 'model-select-input',
-    placeholder: '模型名称，例如 gpt-6-astra',
+    placeholder: t('model.placeholder'),
     onChange: (value) => {
       const supplier = store.getCurrentSupplier();
       if (supplier) store.patchSupplierModel(supplier.id, { model: value });
@@ -65,47 +62,36 @@ export function createModelSelect(store) {
     if (supplier) store.persistSupplier(supplier.id);
   });
 
-  const fetchBtn = el('button', {
-    class: 'btn btn--sm',
+  /** 模型输入框右侧的箭头：每次展开都重新拉取模型列表并展开候选 */
+  const fetchToggle = el('button', {
+    class: 'combo__toggle',
     type: 'button',
-    title: '从 {Base URL}/models 拉取模型列表',
-    onClick: () => handleFetchModels(),
+    title: t('model.fetchTitle'),
+    html: icon('chevronDown', { size: 15 }),
+    onClick: () => handleToggleList(),
   });
-  fetchBtn.innerHTML = `${icon('refresh', { size: 14 })}<span>获取模型</span>`;
+  modelCombobox.root.appendChild(fetchToggle);
 
-  const thinkingBtn = el('button', {
-    class: 'btn btn--sm',
-    type: 'button',
-    onClick: () => {
-      const supplier = store.getCurrentSupplier();
-      if (supplier) thinkingModal.open(supplier.id);
-    },
+  const thinkingSelect = createSelect({
+    title: t('model.thinkingTitle'),
+    value: THINKING_LEVELS[0].value,
+    options: thinkingOptions(),
+    onChange: (value) => handleThinkingChange(value),
   });
-
-  const statusNode = el('span', { class: 'prompt__model-status' });
 
   const root = el('div', { class: 'prompt__model-select' }, [
-    protocolSelect,
+    protocolSelect.root,
     modelCombobox.root,
-    fetchBtn,
-    thinkingBtn,
-    statusNode,
+    thinkingSelect.root,
   ]);
 
   /* --------------------------- 交互逻辑 --------------------------- */
 
-  function setStatus(text, tone = 'muted') {
-    const message = text || '';
-    statusNode.textContent = message;
-    statusNode.title = message;
-    statusNode.className = `prompt__model-status is-${tone}`;
-  }
-
   /** 当前协议下应当展示的候选模型 */
   function optionsFor(supplier) {
     const fetched = modelCache.get(supplier.id);
-    if (fetched && fetched.length) return { list: fetched, fromFetch: true };
-    return { list: getProtocol(supplier.protocol).defaultModels, fromFetch: false };
+    if (fetched && fetched.length) return fetched;
+    return getProtocol(supplier.protocol).defaultModels;
   }
 
   function handleProtocolChange(value) {
@@ -114,106 +100,126 @@ export function createModelSelect(store) {
 
     store.patchSupplierModel(supplier.id, { protocol: value });
     store.persistSupplier(supplier.id);
-
-    const meta = getProtocol(value);
-    const fetched = modelCache.get(supplier.id);
-    if (fetched && fetched.length) {
-      modelCombobox.setOptions(fetched);
-      setStatus(`候选模型来自已拉取的列表（${fetched.length} 个）。`);
-    } else if (meta.defaultModels.length) {
-      modelCombobox.setOptions(meta.defaultModels);
-      setStatus('尚未拉取模型列表，已展示该协议的默认模型建议。');
-    } else {
-      modelCombobox.setOptions([]);
-      setStatus('该协议没有默认模型建议，请手动输入模型 ID。');
-    }
+    modelCombobox.setOptions(optionsFor(supplier));
   }
 
-  async function handleFetchModels() {
+  function handleThinkingChange(level) {
     const supplier = store.getCurrentSupplier();
-    if (!supplier || fetching) return;
+    if (!supplier) return;
+    store.setSupplierThinking(supplier.id, { level: getThinkingLevel(level) });
+  }
 
-    fetching = true;
-    abortController = new AbortController();
-    setButtonBusy(fetchBtn, true, '获取中…');
-    setStatus('正在请求模型列表接口…', 'loading');
+  function setFetchBusy(busy) {
+    fetchToggle.disabled = busy;
+    fetchToggle.innerHTML = busy
+      ? icon('loader', { size: 15, className: 'spin' })
+      : icon('chevronDown', { size: 15 });
+  }
+
+  /** 箭头按钮：展开 / 收起候选列表；每次展开都重新拉取，保证列表与服务器一致 */
+  async function handleToggleList() {
+    const supplier = store.getCurrentSupplier();
+    if (!supplier) return;
+
+    if (modelCombobox.isOpen()) {
+      modelCombobox.close();
+      return;
+    }
+
+    await fetchModels();
+  }
+
+  /**
+   * 拉取当前供应商的模型列表。
+   *
+   * 结果按「发起请求时的供应商 ID」归档：请求期间若用户切换了供应商，
+   * 只更新该供应商的缓存与连接状态，绝不写入当前下拉框，避免列表互串。
+   */
+  async function fetchModels() {
+    const supplier = store.getCurrentSupplier();
+    if (!supplier || fetchingIds.has(supplier.id)) return;
+
+    const supplierId = supplier.id;
+    fetchingIds.add(supplierId);
+    setFetchBusy(true);
 
     try {
-      const { models, host } = await fetchModelList({
+      const { models } = await fetchModelList({
         baseUrl: supplier.baseUrl,
         apiKey: decodeApiKey(supplier.apiKeyB64),
         protocol: supplier.protocol || 'chat',
-        signal: abortController.signal,
       });
-      modelCache.set(supplier.id, models);
-      modelCombobox.setOptions(models);
-      setStatus(`获取成功：共 ${models.length} 个模型（${host}）。`, 'ok');
-      store.setSupplierConnection(supplier.id, {
+      modelCache.set(supplierId, models);
+      store.setSupplierConnection(supplierId, {
         status: 'ok',
-        message: `已获取模型列表（${models.length} 个）`,
+        message: t('model.fetchSuccess', { n: models.length }),
         testedAt: Date.now(),
       });
-      toastSuccess('已获取模型列表', `共 ${models.length} 个模型`);
-      modelCombobox.input.focus();
+      // 请求期间已切换供应商：结果只留在缓存里，不回写到当前下拉框
+      if (store.state.currentSupplierId !== supplierId) return;
+      // 刚拉取到的完整列表要全部展示，不能被输入框里已填的模型名过滤掉
+      modelCombobox.setOptions(models);
+      modelCombobox.openUnfiltered();
     } catch (error) {
       const info = describeError(error);
-      if (info.kind === 'canceled') {
-        setStatus('已取消获取模型列表。');
-      } else {
-        const fallback = optionsFor(supplier);
-        modelCombobox.setOptions(fallback.list);
-        const fallbackText = fallback.list.length
-          ? '已展示该协议的默认模型建议，也可以直接手动输入模型 ID。'
-          : '请直接手动输入模型 ID。';
-        setStatus(`${info.message}${info.detail ? ` ${info.detail}` : ''} ${fallbackText}`, 'error');
-        store.setSupplierConnection(supplier.id, {
-          status: 'error',
-          message: [info.message, info.detail].filter(Boolean).join(' ').slice(0, 300),
-          testedAt: Date.now(),
-        });
-        toastError('获取模型列表失败', fallbackText);
-      }
+      if (info.kind === 'canceled') return;
+      store.setSupplierConnection(supplierId, {
+        status: 'error',
+        message: [info.message, info.detail].filter(Boolean).join(' ').slice(0, 300),
+        testedAt: Date.now(),
+      });
+      if (store.state.currentSupplierId !== supplierId) return;
+      modelCombobox.setOptions(optionsFor(supplier));
+      toastError(t('model.fetchFailed'), [info.message, info.detail].filter(Boolean).join(' '));
+      modelCombobox.openUnfiltered();
     } finally {
-      fetching = false;
-      abortController = null;
-      setButtonBusy(fetchBtn, false);
+      fetchingIds.delete(supplierId);
+      setFetchBusy(fetchingIds.has(store.state.currentSupplierId));
     }
   }
 
   /* --------------------------- 渲染 --------------------------- */
 
+  /** 语言变化时更新下拉标题、候选项与占位符（保留输入值与模型缓存） */
+  let renderedLocale = null;
+  function applyLocaleIfNeeded() {
+    if (store.state.locale === renderedLocale) return;
+    renderedLocale = store.state.locale;
+    protocolSelect.trigger.title = t('model.protocolTitle');
+    thinkingSelect.trigger.title = t('model.thinkingTitle');
+    fetchToggle.title = t('model.fetchTitle');
+    modelCombobox.input.placeholder = t('model.placeholder');
+    protocolSelect.setOptions(protocolOptions());
+    thinkingSelect.setOptions(thinkingOptions());
+  }
+
   function render() {
+    applyLocaleIfNeeded();
+
     const supplier = store.getCurrentSupplier();
 
     if (!supplier) {
       renderedSupplierId = null;
-      setStatus('');
       return;
     }
 
     const protocol = getProtocol(supplier.protocol).value;
-    if (protocolSelect.value !== protocol) protocolSelect.value = protocol;
+    if (protocolSelect.getValue() !== protocol) protocolSelect.setValue(protocol);
 
     if (renderedSupplierId !== supplier.id) {
-      // 切换供应商：回填该供应商保存的模型与候选列表
+      // 切换供应商：回填该供应商保存的模型与候选列表，并同步拉取按钮状态
       renderedSupplierId = supplier.id;
       modelCombobox.setValue(supplier.model || '');
-      modelCombobox.setOptions(optionsFor(supplier).list);
-      setStatus('');
+      modelCombobox.setOptions(optionsFor(supplier));
+      setFetchBusy(fetchingIds.has(supplier.id));
     } else if (document.activeElement !== modelCombobox.input) {
       // 外部改动了模型（例如保存时的规范化）且输入框未聚焦时才回填，避免打断输入
       const expected = supplier.model || '';
       if (modelCombobox.getValue() !== expected) modelCombobox.setValue(expected);
     }
 
-    const thinking = supplier.thinking || {};
-    const level = thinking.level || 'auto';
-    const active = Boolean(thinking.enabled) && level !== 'auto';
-    thinkingBtn.innerHTML = `${icon('wand', { size: 14 })}<span>思考 ${LEVEL_LABELS[level] || '自动'}</span>`;
-    thinkingBtn.classList.toggle('is-on', active);
-    thinkingBtn.title = active
-      ? `已开启思考参数：${thinking.paramName || '未配置参数名'}（等级：${LEVEL_LABELS[level]}）`
-      : '配置思考等级与参数（默认不发送任何思考参数）';
+    const level = getThinkingLevel(supplier.thinking?.level);
+    if (thinkingSelect.getValue() !== level) thinkingSelect.setValue(level);
   }
 
   store.subscribe(render);

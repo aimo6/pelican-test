@@ -8,6 +8,7 @@
  */
 
 import { clear, el } from '../utils/dom.js';
+import { t } from '../utils/i18n.js';
 
 const MAX_VISIBLE = 200;
 
@@ -28,6 +29,8 @@ export function createCombobox(options = {}) {
   let visibleItems = [];
   let open = false;
   let closeTimer = null;
+  /** 本次展开是否忽略输入框内容（拉取模型列表后需要看到全部候选项，而不是被已填的模型名过滤） */
+  let ignoreFilter = false;
 
   const input = el('input', {
     id,
@@ -55,6 +58,7 @@ export function createCombobox(options = {}) {
   const root = el('div', { class: 'combo' }, [input, list]);
 
   function filterItems() {
+    if (ignoreFilter) return items.slice(0, MAX_VISIBLE);
     const keyword = input.value.trim().toLowerCase();
     if (!keyword) return items.slice(0, MAX_VISIBLE);
     return items.filter((item) => item.toLowerCase().includes(keyword)).slice(0, MAX_VISIBLE);
@@ -68,7 +72,7 @@ export function createCombobox(options = {}) {
       list.appendChild(
         el('li', {
           class: 'combo__empty',
-          text: items.length === 0 ? '暂无模型列表，可直接手动输入模型 ID' : '没有匹配的模型，可直接手动输入',
+          text: items.length === 0 ? t('combobox.empty') : t('combobox.noMatch'),
         }),
       );
       activeIndex = -1;
@@ -104,13 +108,22 @@ export function createCombobox(options = {}) {
     });
   }
 
-  function openList() {
+  /**
+   * 展开候选列表。
+   * @param {{unfiltered?: boolean}} [options] unfiltered 为 true 时忽略输入框内容，展示全部候选项
+   */
+  function openList({ unfiltered = false } = {}) {
     // 取消可能存在的延迟关闭，避免「刚打开又被收起」
     if (closeTimer) {
       clearTimeout(closeTimer);
       closeTimer = null;
     }
-    if (open) return;
+    ignoreFilter = unfiltered;
+    if (open) {
+      // 已展开：只按新的过滤状态刷新列表
+      renderList();
+      return;
+    }
     open = true;
     input.setAttribute('aria-expanded', 'true');
     list.hidden = false;
@@ -135,9 +148,8 @@ export function createCombobox(options = {}) {
 
   input.addEventListener('input', () => {
     onChange(input.value);
-    openList();
     activeIndex = -1;
-    renderList();
+    openList();
   });
 
   input.addEventListener('focus', () => openList());
@@ -193,6 +205,13 @@ export function createCombobox(options = {}) {
     },
     getValue() {
       return input.value.trim();
+    },
+    /** 展开候选列表（有候选项时） */
+    open: openList,
+    /** 展开候选列表并忽略输入框内容，展示全部候选项（用于「拉取模型列表」后） */
+    openUnfiltered: () => openList({ unfiltered: true }),
+    isOpen() {
+      return open;
     },
     setDisabled(disabled) {
       input.disabled = Boolean(disabled);

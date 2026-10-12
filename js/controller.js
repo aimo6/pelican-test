@@ -3,12 +3,13 @@
  * 组件只负责展示与触发，业务编排集中在这里。
  */
 
-import { REQUEST_TIMEOUT_MS } from './config.js';
+import { MAX_ATTEMPTS, REQUEST_TIMEOUT_MS, RETRY_DELAY_MS } from './config.js';
 import { decodeApiKey } from './utils/base64.js';
 import { formatDuration } from './utils/dom.js';
+import { t } from './utils/i18n.js';
 import { extractSvgFromText, sanitizeSvg } from './utils/svg.js';
 import { runInference } from './services/inference.js';
-import { describeError } from './services/http.js';
+import { ApiError, describeError, isRetryableError } from './services/http.js';
 import { toastError, toastInfo, toastWarning } from './components/toast.js';
 
 /** 这些失败类型说明「连接本身」有问题，需要更新供应商的连接状态 */
@@ -36,22 +37,76 @@ export function createController(store) {
   }
 
   /**
+   * 等待重试间隔；等待期间被取消时立即以「已取消」结束。
+   * @param {number} ms
+   * @param {AbortSignal|null} signal
+   */
+  function waitForRetry(ms, signal) {
+    return new Promise((resolve, reject) => {
+      let timer = null;
+      const onAbort = () => {
+        clearTimeout(timer);
+        reject(new ApiError(t('http.canceled'), { kind: 'canceled' }));
+      };
+      timer = setTimeout(() => {
+        if (signal) signal.removeEventListener('abort', onAbort);
+        resolve();
+      }, ms);
+      if (signal && signal.aborted) onAbort();
+      else if (signal) signal.addEventListener('abort', onAbort, { once: true });
+    });
+  }
+
+  /**
+   * 带自动重试的推理请求。
+   *
+   * 只重试可恢复的失败（超时 / 限流 / 服务端错误），最多尝试 MAX_ATTEMPTS 次（含首次）；
+   * 每次重试前渐进等待（2s / 4s / 6s / 8s），等待期间取消会立即结束。
+   * 重试进度通过 run.note 反馈到界面。
+   *
+   * @param {Parameters<typeof runInference>[0]} params
+   */
+  async function runWithRetry(params) {
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        return await runInference(params);
+      } catch (error) {
+        const canRetry =
+          isRetryableError(error) &&
+          attempt < MAX_ATTEMPTS &&
+          !(params.signal && params.signal.aborted);
+        if (!canRetry) throw error;
+
+        const delayMs = RETRY_DELAY_MS * attempt;
+        store.setRun({
+          note: t('controller.retrying', {
+            next: attempt + 1,
+            max: MAX_ATTEMPTS,
+            seconds: Math.round(delayMs / 1000),
+          }),
+        });
+        await waitForRetry(delayMs, params.signal);
+      }
+    }
+  }
+
+  /**
    * 发起一次真实请求。
    * @param {string} prompt
    */
   async function runTest(prompt) {
     if (abortController) {
-      toastInfo('已有请求正在进行，请先等待或取消。');
+      toastInfo(t('controller.busy'));
       return;
     }
 
     const supplier = store.getCurrentSupplier();
     if (!supplier) {
-      toastError('还没有可用的供应商', '请先添加并选择一个供应商。');
+      toastError(t('controller.noProvider'), t('controller.noProviderHint'));
       return;
     }
     if (!supplier.model) {
-      toastError('当前供应商还没有选择模型', '请在底部的模型输入框中填写或拉取模型。');
+      toastError(t('controller.noModel'), t('controller.noModelHint'));
       document.getElementById('model-select-input')?.focus();
       return;
     }
@@ -73,7 +128,7 @@ export function createController(store) {
     store.setPromptQuiet(prompt);
 
     try {
-      const response = await runInference({
+      const response = await runWithRetry({
         baseUrl: supplier.baseUrl,
         apiKey,
         protocol: snapshot.protocol,
@@ -123,31 +178,35 @@ export function createController(store) {
       });
 
       store.setResult(record);
+      const doneNote = t('controller.done', { d: formatDuration(durationMs) });
       store.setRun({
         status: 'success',
         error: null,
-        note: `完成，耗时 ${formatDuration(durationMs)}${response.thinkingNote ? ` · ${response.thinkingNote}` : ''}`,
+        note: response.thinkingNote ? `${doneNote} · ${response.thinkingNote}` : doneNote,
       });
       store.setSupplierConnection(snapshot.id, {
         status: 'ok',
-        message: `最近一次请求成功（${formatDuration(durationMs)}）`,
+        message: t('controller.connectionOk', { d: formatDuration(durationMs) }),
         testedAt: Date.now(),
       });
 
-      const { error } = await store.addHistory(record);
-      if (error) toastError('历史记录保存失败', error.message);
+      // 测试历史只保存「成功生成图片」的结果，没解析出 SVG 的响应不写入历史
+      if (parseOk) {
+        const { error } = await store.addHistory(record);
+        if (error) toastError(t('controller.historySaveFailed'), error.message);
+      }
 
       if (!parseOk) {
-        toastWarning('没有解析出可预览的 SVG', '原始响应已保留，可在结果区展开「原始响应」查看。');
+        toastWarning(t('controller.noSvg'), t('controller.noSvgHint'));
       } else if (response.finishReason === 'length') {
-        toastWarning('模型输出可能被截断', '已达到输出长度上限，SVG 可能不完整。');
+        toastWarning(t('controller.truncated'), t('controller.truncatedHint'));
       }
     } catch (error) {
       const info = describeError(error);
 
       if (info.kind === 'canceled') {
-        store.setRun({ status: 'canceled', error: null, note: '请求已取消' });
-        toastInfo('已取消请求');
+        store.setRun({ status: 'canceled', error: null, note: t('controller.canceled') });
+        toastInfo(t('controller.canceledToast'));
         return;
       }
 
@@ -178,8 +237,7 @@ export function createController(store) {
         });
       }
 
-      const { error: saveError } = await store.addHistory(record);
-      if (saveError) toastError('历史记录保存失败', saveError.message);
+      // 失败的测试只在结果区展示，不写入历史
     } finally {
       abortController = null;
     }

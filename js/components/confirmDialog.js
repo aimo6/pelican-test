@@ -5,6 +5,7 @@
 
 import { el } from '../utils/dom.js';
 import { icon } from '../utils/icons.js';
+import { t } from '../utils/i18n.js';
 
 /**
  * @param {{title: string, message: string, detail?: string, confirmText?: string, cancelText?: string, danger?: boolean}} options
@@ -15,8 +16,8 @@ export function confirmDialog(options) {
     title,
     message,
     detail = '',
-    confirmText = '确认',
-    cancelText = '取消',
+    confirmText = t('common.confirm'),
+    cancelText = t('common.cancel'),
     danger = false,
   } = options;
 
@@ -38,7 +39,7 @@ export function confirmDialog(options) {
         el('button', {
           class: 'icon-btn',
           type: 'button',
-          title: '关闭',
+          title: t('common.close'),
           html: icon('x', { size: 16 }),
           onClick: () => finish(false),
         }),

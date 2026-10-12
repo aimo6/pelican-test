@@ -4,6 +4,7 @@
 
 import { el } from '../utils/dom.js';
 import { icon } from '../utils/icons.js';
+import { t } from '../utils/i18n.js';
 
 const ICON_BY_TYPE = {
   success: 'check',
@@ -37,7 +38,7 @@ export function toast(message, options = {}) {
     el('button', {
       class: 'toast__close',
       type: 'button',
-      title: '关闭',
+      title: t('common.close'),
       html: icon('x', { size: 14 }),
       onClick: () => remove(),
     }),

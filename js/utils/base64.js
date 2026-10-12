@@ -11,6 +11,8 @@
  * 必须另外设计真正的密钥保护与访问控制方案（例如由服务端代理请求、密钥托管在服务端 KMS 等）。
  */
 
+import { t } from './i18n.js';
+
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
@@ -75,7 +77,7 @@ export function decodeApiKey(encoded) {
  * @returns {string}
  */
 export function maskApiKey(plain) {
-  if (!plain) return '（未设置）';
+  if (!plain) return t('base64.notSet');
   const text = String(plain);
   if (text.length <= 8) return '••••••';
   return `${text.slice(0, 3)}••••••${text.slice(-4)}`;

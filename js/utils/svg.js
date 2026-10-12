@@ -11,6 +11,8 @@
  * 注意：绝不能把模型原始输出直接 innerHTML 到页面里。
  */
 
+import { t } from './i18n.js';
+
 /** 允许保留的 SVG 元素白名单 */
 const ALLOWED_ELEMENTS = new Set([
   'svg',
@@ -155,7 +157,7 @@ function parseSvgDocument(source) {
   try {
     doc = new DOMParser().parseFromString(cleaned, 'image/svg+xml');
   } catch (error) {
-    return { ok: false, doc: null, error: 'XML 解析异常，无法解析该内容' };
+    return { ok: false, doc: null, error: t('svg.xmlException') };
   }
 
   const parserError = doc.querySelector('parsererror');
@@ -164,13 +166,13 @@ function parseSvgDocument(source) {
     return {
       ok: false,
       doc: null,
-      error: message ? `XML 解析失败：${message.slice(0, 200)}` : 'XML 解析失败，内容不是合法的 SVG',
+      error: message ? t('svg.parseFailedWithMessage', { message: message.slice(0, 200) }) : t('svg.parseFailed'),
     };
   }
 
   const root = doc.documentElement;
   if (!root || root.nodeName.toLowerCase() !== 'svg') {
-    return { ok: false, doc: null, error: '内容中未找到 <svg> 根元素' };
+    return { ok: false, doc: null, error: t('svg.noRoot') };
   }
   return { ok: true, doc, error: null };
 }
@@ -185,7 +187,7 @@ function parseSvgDocument(source) {
 export function extractSvgFromText(text) {
   const raw = String(text ?? '');
   if (!raw.trim()) {
-    return { svg: null, strategy: null, error: '模型返回内容为空', candidateCount: 0 };
+    return { svg: null, strategy: null, error: t('svg.emptyOutput'), candidateCount: 0 };
   }
 
   const blocks = findSvgBlocks(raw);
@@ -193,7 +195,7 @@ export function extractSvgFromText(text) {
     return {
       svg: null,
       strategy: null,
-      error: '未在模型输出中找到完整的 <svg>…</svg> 片段（可能被截断或未按要求输出）',
+      error: t('svg.noBlock'),
       candidateCount: 0,
     };
   }
@@ -213,7 +215,7 @@ export function extractSvgFromText(text) {
   return {
     svg: fallback ? fallback.trim() : null,
     strategy: 'unparsed',
-    error: firstError || 'SVG 片段无法通过 XML 校验',
+    error: firstError || t('svg.invalidFragment'),
     candidateCount: blocks.length,
   };
 }
@@ -267,7 +269,7 @@ function sanitizeCssText(css) {
 export function sanitizeSvg(source) {
   const parsed = parseSvgDocument(source);
   if (!parsed.ok || !parsed.doc) {
-    return { svg: null, removed: [], error: parsed.error || 'SVG 解析失败' };
+    return { svg: null, removed: [], error: parsed.error || t('svg.parseError') };
   }
 
   const doc = parsed.doc;
@@ -316,7 +318,7 @@ export function sanitizeSvg(source) {
       serialized = new XMLSerializer().serializeToString(doc.documentElement);
     }
   } catch (error) {
-    return { svg: null, removed: [...removed], error: 'SVG 序列化失败' };
+    return { svg: null, removed: [...removed], error: t('svg.serializeFailed') };
   }
 
   return { svg: serialized, removed: [...removed], error: null };

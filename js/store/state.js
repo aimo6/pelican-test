@@ -5,14 +5,10 @@
  * 所有持久化都通过 store/db.js 完成，这里只负责维护内存中的一致视图。
  */
 
-import {
-  DEFAULT_PROMPT,
-  DEFAULT_PROTOCOL,
-  HISTORY_LIMIT,
-  createDefaultThinking,
-  getProtocol,
-} from '../config.js';
+import { DEFAULT_PROTOCOL, HISTORY_LIMIT, createDefaultThinking, getProtocol } from '../config.js';
 import { uid, truncate } from '../utils/dom.js';
+import * as i18n from '../utils/i18n.js';
+import { t } from '../utils/i18n.js';
 import * as db from './db.js';
 
 /** @typedef {ReturnType<typeof createInitialState>} AppState */
@@ -26,6 +22,9 @@ function createInitialState() {
     /** 存储层初始化错误（用于顶部提示） */
     storageError: /** @type {Error|null} */ (null),
 
+    /** 当前界面语言（zh | en），语言真值由 utils/i18n.js 持有 */
+    locale: i18n.getLocale(),
+
     /** @type {any[]} 供应商列表 */
     suppliers: [],
     /** @type {string|null} 当前选中的供应商 ID */
@@ -37,7 +36,7 @@ function createInitialState() {
     activeHistoryId: null,
 
     /** 提示词草稿（外部恢复历史时通过 promptRevision 通知输入框同步） */
-    prompt: DEFAULT_PROMPT,
+    prompt: t('prompt.example'),
     promptRevision: 0,
 
     /** 请求运行状态 */
@@ -84,9 +83,18 @@ function patch(partial) {
 /** 统一的错误提示文本 */
 function describeStorageFailure(error) {
   if (error && error.kind === 'quota') {
-    return '浏览器本地存储空间不足，数据可能未保存成功。请清理浏览器存储或删除部分历史记录后重试。';
+    return t('storage.quota');
   }
-  return (error && error.message) || '本地存储操作失败。';
+  return (error && error.message) || t('storage.failed');
+}
+
+/**
+ * 判断一条历史记录是否符合「只保存成功图片」的规则。
+ * 旧版本会写入请求失败 / 未解析出 SVG 的记录，这里用于清理。
+ * @param {any} record
+ */
+function isSavedHistoryRecord(record) {
+  return Boolean(record && record.status === 'success' && record.svgSanitized);
 }
 
 /**
@@ -102,7 +110,7 @@ function deriveSupplierName(baseUrl, suppliers, excludeId = null) {
   } catch (error) {
     host = '';
   }
-  const base = host || '未命名供应商';
+  const base = host || t('common.unnamedProvider');
   const taken = new Set(suppliers.filter((item) => item.id !== excludeId).map((item) => item.name));
   if (!taken.has(base)) return base;
 
@@ -117,6 +125,22 @@ export const store = {
   },
 
   subscribe,
+
+  /* ---------------------------------------------------------------- *
+   * 界面语言
+   * ---------------------------------------------------------------- */
+
+  /**
+   * 切换界面语言：更新 i18n 模块（含 localStorage 持久化与 <html lang>）并触发重渲染。
+   * @param {string} next zh | en
+   */
+  setLocale(next) {
+    const locale = i18n.setLocale(next);
+    if (locale === state.locale) return locale;
+    state.locale = locale;
+    notify();
+    return locale;
+  },
 
   /* ---------------------------------------------------------------- *
    * 初始化
@@ -147,7 +171,18 @@ export const store = {
       ...item,
       protocol: getProtocol(item.protocol).value,
     }));
-    state.history = history.slice(0, HISTORY_LIMIT);
+
+    // 历史只保留成功生成图片的记录：清理旧版本遗留的失败 / 解析失败记录
+    const keptHistory = history.filter(isSavedHistoryRecord);
+    const staleHistory = history.filter((item) => !isSavedHistoryRecord(item));
+    if (staleHistory.length) {
+      try {
+        await Promise.all(staleHistory.map((item) => db.deleteHistoryRecord(item.id)));
+      } catch (error) {
+        // 清理失败不影响使用：内存中已按新规则过滤
+      }
+    }
+    state.history = keptHistory.slice(0, HISTORY_LIMIT);
 
     // 恢复上次选中的供应商；若已不存在则退回第一个
     const savedId = settings.currentSupplierId;
@@ -377,7 +412,7 @@ export const store = {
    */
   openHistory(id) {
     const record = state.history.find((item) => item.id === id);
-    if (!record) return { error: new Error('找不到该历史记录') };
+    if (!record) return { error: new Error(t('storage.historyNotFound')) };
 
     state.activeHistoryId = id;
     state.result = record;
@@ -427,14 +462,14 @@ export const store = {
   buildHistoryRecord(input) {
     return {
       id: uid('hist'),
-      title: truncate(input.prompt || '未命名测试', 60),
+      title: truncate(input.prompt || t('common.untitledTest'), 60),
       prompt: input.prompt || '',
       rawResponse: input.rawResponse || '',
       svgSource: input.svgSource || null,
       svgSanitized: input.svgSanitized || null,
       parse: input.parse || { ok: false, strategy: null, error: null, removed: [] },
       supplierId: input.supplierId || null,
-      supplierName: input.supplierName || '未记录',
+      supplierName: input.supplierName || t('common.notRecorded'),
       model: input.model || '',
       protocol: input.protocol || '',
       thinkingLevel: input.thinkingLevel || 'auto',
@@ -475,7 +510,7 @@ export const store = {
     return {
       app: 'pelican-test-web',
       exportedAt: new Date().toISOString(),
-      note: '出于安全考虑，导出的数据不包含 API Key，导入后需要重新填写。',
+      note: t('storage.exportNote'),
       currentSupplierId: state.currentSupplierId,
       suppliers: state.suppliers.map((supplier) => {
         const { apiKeyB64, ...rest } = supplier;

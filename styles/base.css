@@ -241,87 +241,54 @@ code,
   display: flex;
   flex-direction: column;
   gap: 10px;
-  padding: 14px 12px 10px;
+  padding: 12px 12px 10px;
   min-height: 0;
   background: var(--surface);
   border-right: 1px solid var(--border);
 }
 
 .sidebar__section {
-  flex: 0 0 auto;
   display: flex;
   flex-direction: column;
-  gap: 9px;
+  gap: 8px;
   min-height: 0;
 }
 
-/* 展开的区块：内容不足时保持自然高度，内容超出时收缩并在列表内部滚动 */
-.sidebar__section.is-expanded {
+/* 供应商区块：内容少时保持自然高度，超过上限后列表内部滚动 */
+.sidebar__section--suppliers {
   flex: 0 1 auto;
-  min-height: 0;
+  max-height: 45%;
 }
 
-.sidebar__section-body {
+/* 历史区块：占据剩余空间，列表内部滚动 */
+.sidebar__section--history {
   flex: 1 1 auto;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 9px;
 }
 
-.sidebar__head {
+/* 区块之间用细分隔线区隔 */
+.sidebar__section + .sidebar__section {
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.sidebar__section-head {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  min-height: 30px;
+  padding: 0 1px;
 }
 
-.sidebar__toggle {
-  flex: 1 1 auto;
-  min-width: 0;
-  display: flex;
+.sidebar__section-label {
+  display: inline-flex;
   align-items: center;
   gap: 7px;
-  margin: -4px -5px;
-  padding: 4px 5px;
-  border: none;
-  border-radius: 5px;
-  background: none;
-  text-align: left;
-  cursor: pointer;
+  min-width: 0;
 }
 
-.sidebar__toggle:hover {
-  background: var(--surface-3);
-}
-
-.sidebar__toggle:hover .sidebar__title {
-  color: var(--text-2);
-}
-
-.sidebar__toggle:focus-visible {
-  outline: 2px solid var(--accent-border);
-  outline-offset: 1px;
-}
-
-.sidebar__chevron {
-  display: inline-flex;
-  margin-left: auto;
-  color: var(--text-3);
-  transition: transform 0.16s ease;
-}
-
-.sidebar__toggle[aria-expanded='true'] .sidebar__chevron {
-  transform: rotate(180deg);
-}
-
-.sidebar__head-right {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.sidebar__title {
+.sidebar__section-title {
   font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.08em;
@@ -342,17 +309,7 @@ code,
   overflow-x: hidden;
   margin: 0 -4px;
   padding: 2px 4px;
-}
-
-.sidebar__foot {
-  flex: 0 0 auto;
-  margin-top: auto;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding-top: 9px;
-  border-top: 1px solid var(--border);
+  overscroll-behavior: contain;
 }
 
 /* ==========================================================================
@@ -406,8 +363,12 @@ code,
     border-bottom: 1px solid var(--border);
   }
 
-  .sidebar__section.is-expanded {
-    max-height: 340px;
+  .sidebar__section--suppliers {
+    max-height: 300px;
+  }
+
+  .sidebar__section--history {
+    max-height: 360px;
   }
 
   .workspace {

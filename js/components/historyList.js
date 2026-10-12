@@ -1,21 +1,48 @@
 /**
- * 左侧「测试历史」组件（可折叠，展开状态由侧边栏统一控制）。
+ * 左侧「测试历史」组件：最近记录以「缩略图 + 信息」的卡片平铺展示，列表独立滚动。
  *
  * 历史记录是配置与结果的快照：即使供应商后来被编辑或删除，这里展示的仍然是当时的信息。
  * 点击历史只从本地恢复数据，不会重新调用模型。
  */
 
-import { HISTORY_LIMIT } from '../config.js';
+import { HISTORY_LIMIT, PROTOCOLS } from '../config.js';
 import { clear, el, formatDuration, formatFullTime, formatTime } from '../utils/dom.js';
 import { icon } from '../utils/icons.js';
+import { t } from '../utils/i18n.js';
+import { createSvgBlobUrl, ensureSvgSize } from '../utils/svg.js';
 import { confirmDialog } from './confirmDialog.js';
 import { toastError, toastSuccess } from './toast.js';
 
 /**
  * @param {import('../store/state.js').store} store
- * @param {{ onToggle?: () => void }} [options]
  */
-export function createHistoryList(store, options = {}) {
+export function createHistoryList(store) {
+  /** 缩略图 Blob URL 缓存（按记录 ID 复用，避免每次重渲染都新建对象 URL） */
+  const thumbUrls = new Map();
+  /** 上一次渲染的列表签名，内容没变时跳过重建，避免重复解码缩略图 */
+  let renderedSignature = '';
+
+  /** 取得（或创建）某条记录的缩略图 URL */
+  function thumbUrlFor(record) {
+    if (!record.svgSanitized) return null;
+    const cached = thumbUrls.get(record.id);
+    if (cached) return cached;
+    const sized = ensureSvgSize(record.svgSanitized);
+    const url = createSvgBlobUrl(sized.svg);
+    thumbUrls.set(record.id, url);
+    return url;
+  }
+
+  /** 回收已经不在列表中的缩略图 URL */
+  function pruneThumbs(history) {
+    const alive = new Set(history.map((item) => item.id));
+    for (const [id, url] of [...thumbUrls]) {
+      if (alive.has(id)) continue;
+      URL.revokeObjectURL(url);
+      thumbUrls.delete(id);
+    }
+  }
+
   const list = el('ul', { class: 'item-list' });
   const scroll = el('div', { class: 'sidebar__scroll' }, list);
   const count = el('span', { class: 'sidebar__count' });
@@ -23,120 +50,148 @@ export function createHistoryList(store, options = {}) {
   const clearBtn = el('button', {
     class: 'link-btn link-btn--danger',
     type: 'button',
-    text: '清空',
+    text: t('history.clear'),
     onClick: async () => {
       const total = store.state.history.length;
       if (total === 0) return;
       const confirmed = await confirmDialog({
-        title: '清空测试历史',
-        message: `确定要清空全部 ${total} 条测试历史吗？`,
-        detail: '只清除历史记录，已保存的供应商配置不受影响。该操作无法撤销。',
-        confirmText: '清空',
+        title: t('history.confirmClearTitle'),
+        message: t('history.confirmClearMessage', { n: total }),
+        detail: t('history.confirmClearDetail'),
+        confirmText: t('history.confirmClearConfirm'),
         danger: true,
       });
       if (!confirmed) return;
       const { error } = await store.clearHistory();
-      if (error) toastError('清空失败', error.message);
-      else toastSuccess('已清空测试历史');
+      if (error) toastError(t('history.clearFailed'), error.message);
+      else toastSuccess(t('history.cleared'));
     },
   });
 
-  const toggleBtn = el(
-    'button',
-    {
-      class: 'sidebar__toggle',
-      type: 'button',
-      attrs: { 'aria-expanded': 'false' },
-      onClick: () => options.onToggle?.(),
-    },
-    [
-      el('span', { class: 'sidebar__title', text: '测试历史' }),
-      count,
-      el('span', { class: 'sidebar__chevron', html: icon('chevronDown', { size: 14 }) }),
-    ],
-  );
-
-  const body = el('div', { class: 'sidebar__section-body' }, [scroll]);
-
-  const root = el('section', { class: 'sidebar__section' }, [
-    el('div', { class: 'sidebar__head' }, [
-      toggleBtn,
-      el('div', { class: 'sidebar__head-right' }, [clearBtn]),
-    ]),
-    body,
+  const sectionTitle = el('span', { class: 'sidebar__section-title', text: t('history.section') });
+  const head = el('div', { class: 'sidebar__section-head' }, [
+    el('div', { class: 'sidebar__section-label' }, [sectionTitle, count]),
+    clearBtn,
   ]);
 
-  /** 展开 / 收起该区块 */
-  function setExpanded(expanded) {
-    root.classList.toggle('is-expanded', expanded);
-    body.hidden = !expanded;
-    toggleBtn.setAttribute('aria-expanded', String(expanded));
-  }
+  const root = el(
+    'section',
+    { class: 'sidebar__section sidebar__section--history', attrs: { 'aria-label': t('history.section') } },
+    [head, scroll],
+  );
 
   function buildItem(record, isActive) {
-    const statusTone = record.status === 'success' ? 'ok' : 'error';
-    const statusLabel = record.status === 'success' ? '成功' : '失败';
-    const svgTone = record.svgSanitized ? 'ok' : 'muted';
-    const svgLabel = record.svgSanitized ? '含 SVG' : '无 SVG';
+    const protocol = PROTOCOLS.find((item) => item.value === record.protocol) || null;
+
+    const thumb = el('span', { class: 'history-card__thumb' });
+    const thumbUrl = thumbUrlFor(record);
+    if (thumbUrl) {
+      thumb.appendChild(
+        el('img', {
+          class: 'history-card__thumb-img',
+          src: thumbUrl,
+          alt: '',
+          attrs: { loading: 'lazy', draggable: 'false' },
+        }),
+      );
+    } else {
+      thumb.classList.add('is-empty');
+      thumb.innerHTML = icon('image', { size: 16 });
+    }
 
     const main = el('button', {
-      class: 'history-item__main',
+      class: 'history-card__main',
       type: 'button',
       title: record.prompt,
       onClick: () => {
         store.openHistory(record.id);
       },
     }, [
-      el('span', { class: 'history-item__title', text: record.title || '未命名测试' }),
-      el('span', {
-        class: 'history-item__meta',
-        text: `${record.supplierName || '未记录'} · ${record.model || '未记录'}`,
-      }),
-      el('span', { class: 'history-item__foot' }, [
-        el('span', { class: `badge badge--${statusTone}`, text: statusLabel }),
-        el('span', { class: `badge badge--${svgTone}`, text: svgLabel }),
+      thumb,
+      el('span', { class: 'history-card__body' }, [
+        el('span', { class: 'history-card__title', text: record.title || t('common.untitledTest') }),
         el('span', {
-          class: 'history-item__time',
-          text: formatTime(record.createdAt),
-          title: formatFullTime(record.createdAt),
+          class: 'history-card__meta',
+          text: `${record.supplierName || t('common.notRecorded')} · ${record.model || t('common.notRecorded')}`,
         }),
-        record.durationMs ? el('span', { class: 'history-item__time', text: formatDuration(record.durationMs) }) : null,
+        el('span', { class: 'history-card__foot' }, [
+          el('span', { class: 'history-card__facts' }, [
+            el('span', {
+              text: formatTime(record.createdAt),
+              title: formatFullTime(record.createdAt),
+            }),
+            record.durationMs ? el('span', { class: 'history-card__dot', text: '·' }) : null,
+            record.durationMs ? el('span', { text: formatDuration(record.durationMs) }) : null,
+          ]),
+          protocol
+            ? el('span', {
+                class: 'chip',
+                text: protocol.short,
+                title: t('common.protocolTitle', { label: t(protocol.labelKey) }),
+              })
+            : null,
+        ]),
       ]),
     ]);
 
     const deleteBtn = el('button', {
       class: 'icon-btn icon-btn--sm icon-btn--danger',
       type: 'button',
-      title: '删除这条历史',
+      title: t('history.deleteTitle'),
       html: icon('trash', { size: 14 }),
       onClick: async (event) => {
         event.stopPropagation();
         const { error } = await store.deleteHistory(record.id);
-        if (error) toastError('删除失败', error.message);
+        if (error) toastError(t('supplier.deleteFailed'), error.message);
       },
     });
 
     return el(
       'li',
       {
-        class: `history-item${isActive ? ' is-active' : ''}`,
+        class: `history-card${isActive ? ' is-active' : ''}`,
         attrs: { 'aria-current': isActive ? 'true' : 'false' },
       },
-      [main, el('div', { class: 'history-item__actions' }, [deleteBtn])],
+      [main, el('div', { class: 'history-card__actions' }, [deleteBtn])],
     );
   }
 
+  /** 语言变化时更新头部静态文案 */
+  let renderedLocale = null;
+  function applyLocaleIfNeeded() {
+    if (store.state.locale === renderedLocale) return;
+    renderedLocale = store.state.locale;
+    sectionTitle.textContent = t('history.section');
+    root.setAttribute('aria-label', t('history.section'));
+    clearBtn.textContent = t('history.clear');
+  }
+
   function render() {
-    const { history, activeHistoryId } = store.state;
+    const { history, activeHistoryId, locale } = store.state;
+    pruneThumbs(history);
+
+    applyLocaleIfNeeded();
+
     count.textContent = history.length ? `${history.length}/${HISTORY_LIMIT}` : '';
     clearBtn.disabled = history.length === 0;
+
+    // 列表内容没变化时跳过重建（例如输入模型名称触发的重渲染）；
+    // 语言参与签名，保证切换语言后卡片文案（相对时间、协议 title 等）随之更新
+    const signature = `${locale}|${activeHistoryId}|${history
+      .map((item) => `${item.id}:${item.createdAt}`)
+      .join(',')}`;
+    if (signature === renderedSignature) return;
+    renderedSignature = signature;
 
     clear(list);
     if (history.length === 0) {
       list.appendChild(
         el('li', { class: 'empty empty--compact' }, [
-          el('div', { class: 'empty__title', text: '暂无测试历史' }),
-          el('div', { class: 'empty__desc', text: `最近 ${HISTORY_LIMIT} 次测试会自动保存在这里。` }),
+          el('div', { class: 'empty__title', text: t('history.emptyTitle') }),
+          el('div', {
+            class: 'empty__desc',
+            text: t('history.emptyDesc', { limit: HISTORY_LIMIT }),
+          }),
         ]),
       );
       return;
@@ -149,5 +204,5 @@ export function createHistoryList(store, options = {}) {
 
   store.subscribe(render);
 
-  return { root, render, setExpanded };
+  return { root, render };
 }

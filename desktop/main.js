@@ -12,7 +12,7 @@
  * - 仅允许 http / https 协议的目标地址；
  * - 不引入任何遥测、自动更新或崩溃上报通道。
  */
-const { app, BrowserWindow, ipcMain, net, protocol } = require('electron');
+const { app, BrowserWindow, ipcMain, net, protocol, shell } = require('electron');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 
@@ -81,6 +81,13 @@ function createWindow() {
     },
   });
   win.loadURL(`${SCHEME}://${HOST}/index.html`);
+
+  // 页面里的外部链接（顶栏 GitHub 入口）交给系统浏览器打开，而不是新开一个 Electron 窗口
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:/i.test(url)) shell.openExternal(url);
+    return { action: 'deny' };
+  });
+
   return win;
 }
 
